@@ -9,3 +9,6 @@ app-radar-live.app/
 __pycache__/
 venv/
 .venv/
+
+# Kiro IDE local config
+.kiro/
