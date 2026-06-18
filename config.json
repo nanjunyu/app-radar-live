@@ -1,0 +1,9 @@
+{
+  "workspace_dirs": [
+    "/Users/nanjunyu/workspace"
+  ],
+  "ignored_ports": [
+    22, 80, 443, 7000, 5000, 56687, 56688, 56689
+  ],
+  "ignored_containers": []
+}

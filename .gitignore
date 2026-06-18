@@ -1,0 +1,11 @@
+# macOS
+.DS_Store
+
+# Build outputs
+*.app/
+app-radar-live.app/
+
+# Python
+__pycache__/
+venv/
+.venv/
