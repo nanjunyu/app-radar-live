@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AppRadar-Live - 菜单栏常驻雷达</title>
+  <!-- 引入现代字体 Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <!-- 模拟 macOS 顶部菜单栏 -->
+  <div class="mac-menubar">
+    <div class="menubar-left">
+      <span class="apple-logo"></span>
+      <span class="menu-item active">AppRadar-Live</span>
+      <span class="menu-item">控制台</span>
+      <span class="menu-item">配置</span>
+      <span class="menu-item">帮助</span>
+    </div>
+    <div class="menubar-right">
+      <span class="status-item">🔋 98%</span>
+      <span class="status-item">📶</span>
+      <!-- 雷达常驻图标 -->
+      <div id="radarTrigger" class="status-item radar-trigger active">
+        <span class="radar-dot"></span>
+        <span class="radar-pulse"></span>
+        <span class="radar-icon">📡</span>
+      </div>
+      <span id="systemTime" class="status-item font-numeric">15:30</span>
+    </div>
+  </div>
+
+  <!-- 主桌面背景展示 (用于演示悬浮卡片在桌面上弹出的效果) -->
+  <div class="desktop-wallpaper">
+    <div class="desktop-tips">
+      <h2>AppRadar-Live 桌面运行原型</h2>
+      <p>💡 点击顶部菜单栏的右侧雷达图标 <span>📡</span> 可以随时展开或折叠监控面板。</p>
+      <p>在面板中一键扫描，即可逆向捕捉当前运行中的 Docker 容器与占用端口的 Git 仓库并检测更新。</p>
+    </div>
+  </div>
+
+  <!-- 模拟 Mac 状态栏下拉悬浮面板 -->
+  <div id="radarPanel" class="radar-panel show">
+    
+    <!-- 头部雷达状态 -->
+    <div class="panel-header">
+      <div class="header-title">
+        <h3>AppRadar-Live</h3>
+        <span class="badge">V1.0.0 活跃监控中</span>
+      </div>
+      <!-- 雷达大动效 -->
+      <div class="radar-scan-container">
+        <div class="radar-ring">
+          <div class="radar-sweep"></div>
+          <span class="radar-center-dot"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 一键扫描按钮 -->
+    <div class="action-section">
+      <button id="btnScan" class="btn-scan">
+        <span class="icon">🔄</span> 一键侦测运行更新
+      </button>
+    </div>
+
+    <!-- 扫描状态提示 -->
+    <div id="scanStatus" class="scan-status">
+      点击上方按钮开始扫描本地运行环境...
+    </div>
+
+    <!-- 滚动列表容器 -->
+    <div class="panel-body">
+      
+      <!-- 分类一：运行中的 Git 仓库项目 -->
+      <div class="section-group">
+        <div class="section-title">
+          <span>📂 运行中 Git 仓库项目</span>
+          <span id="gitCount" class="count-badge">0</span>
+        </div>
+        <div id="gitList" class="card-list">
+          <div class="empty-state">暂无活跃 Git 进程</div>
+        </div>
+      </div>
+
+      <!-- 分类二：运行中的 Docker 容器 -->
+      <div class="section-group">
+        <div class="section-title">
+          <span>🐳 运行中 Docker 容器</span>
+          <span id="dockerCount" class="count-badge">0</span>
+        </div>
+        <div id="dockerList" class="card-list">
+          <div class="empty-state">暂无活跃容器</div>
+        </div>
+      </div>
+
+      <!-- 分类三：Homebrew 更新项 -->
+      <div class="section-group">
+        <div class="section-title">
+          <span>🍺 Homebrew 待更新列表</span>
+          <span id="brewCount" class="count-badge">0</span>
+        </div>
+        <div id="brewList" class="card-list">
+          <div class="empty-state">暂无待更新工具</div>
+        </div>
+      </div>
+
+      <!-- 分类四：npm 全局包更新项 -->
+      <div class="section-group">
+        <div class="section-title">
+          <span>📦 npm 全局包待更新</span>
+          <span id="npmCount" class="count-badge">0</span>
+        </div>
+        <div id="npmList" class="card-list">
+          <div class="empty-state">暂无待更新全局包</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 底部状态栏 -->
+    <div class="panel-footer">
+      <span>已自动忽略常见系统端口</span>
+      <a href="#" id="btnSettings" class="footer-link">配置 ⚙️</a>
+    </div>
+
+  </div>
+
+  <!-- 全局 Toast 消息 -->
+  <div id="toast" class="toast">已成功复制更新指令</div>
+
+  <!-- 引入逻辑脚本 -->
+  <script src="/static/app.js"></script>
+</body>
+</html>
