@@ -14,10 +14,11 @@ rm -rf "${APP_NAME}"
 mkdir -p "${MACOS_DIR}"
 mkdir -p "${CONTENTS_DIR}/Resources"
 
-# Compile Swift file
+# Compile Swift files
 # Target arm64 explicitly as requested for Apple Silicon
 echo "⚙️ Compiling Swift code..."
-swiftc AppRadar.swift NativeProcessTableView.swift -parse-as-library -o "${MACOS_DIR}/app-radar-live" -target arm64-apple-macosx14.0
+SWIFT_SOURCES=$(find Sources -name "*.swift")
+swiftc ${SWIFT_SOURCES} -parse-as-library -o "${MACOS_DIR}/app-radar-live" -target arm64-apple-macosx14.0
 
 # Copy Info.plist
 cp Info.plist "${CONTENTS_DIR}/"
