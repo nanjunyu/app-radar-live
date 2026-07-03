@@ -4,66 +4,79 @@ import AppKit
 // MARK: - Docker Views
 struct DockerContainerListView: View {
     @ObservedObject var scanner: RadarScanner
+    @ObservedObject var live: LiveMetrics
     var searchText: String
     var accentColor: Color
     
     @State private var showStopAlert = false
     @State private var containerToStop: DockerContainer? = nil
+    @State private var showUpdateAlert = false
+    @State private var containerToUpdate: DockerContainer? = nil
     
     var filteredContainers: [DockerContainer] {
-        if searchText.isEmpty { return scanner.dockerContainers }
-        return scanner.dockerContainers.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+        if searchText.isEmpty { return live.dockerContainers }
+        return live.dockerContainers.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
     
+    // 固定列 + 弹性列最小宽度 + 分隔线/内边距的总和。
+    // 低于此宽度时横向滚动，而不是去挤压 NavigationSplitView 的侧边栏。
+    private let minTableWidth: CGFloat = 940
+    
     var body: some View {
-        VStack(spacing: 0) {
-            // Table Header
-            HStack(spacing: 0) {
-                Text("状态").frame(width: 50, alignment: .center)
-                Color(NSColor.separatorColor).frame(width: 1, height: 14)
-                Text("容器名称").padding(.leading, 8).frame(width: 140, alignment: .leading)
-                Color(NSColor.separatorColor).frame(width: 1, height: 14)
-                Text("Container ID").padding(.leading, 8).frame(width: 110, alignment: .leading)
-                Color(NSColor.separatorColor).frame(width: 1, height: 14)
-                Text("镜像").padding(.leading, 8).frame(minWidth: 140, maxWidth: .infinity, alignment: .leading)
-                Color(NSColor.separatorColor).frame(width: 1, height: 14)
-                Text("端口映射").padding(.leading, 8).frame(width: 220, alignment: .leading)
-                Color(NSColor.separatorColor).frame(width: 1, height: 14)
-                Text("CPU (%)").padding(.trailing, 8).frame(width: 80, alignment: .trailing)
-                Color(NSColor.separatorColor).frame(width: 1, height: 14)
-                Text("内存").padding(.trailing, 8).frame(width: 90, alignment: .trailing)
-                Color(NSColor.separatorColor).frame(width: 1, height: 14)
-                Text("操作").frame(width: 80, alignment: .center)
-            }
-            .font(.system(size: 11))
-            .foregroundColor(.secondary)
-            .padding(.vertical, 4)
-            .padding(.horizontal)
-            .background(.thinMaterial)
-            
-            Divider()
-            
-            if filteredContainers.isEmpty {
-                VStack {
-                    Image(systemName: "shippingbox")
-                        .font(.system(size: 40))
-                        .foregroundColor(.gray.opacity(0.5))
-                    Text("未发现 Docker 容器")
-                        .font(.callout)
-                        .foregroundColor(.gray)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(NSColor.controlBackgroundColor))
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(filteredContainers) { container in
-                            DockerRowView(container: container, scanner: scanner, containerToStop: $containerToStop, showStopAlert: $showStopAlert)
-                            Divider()
+        GeometryReader { geo in
+            ScrollView(.horizontal, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    // Table Header
+                    HStack(spacing: 0) {
+                        Text("状态").frame(width: 50, alignment: .center)
+                        Color(NSColor.separatorColor).frame(width: 1, height: 14)
+                        Text("容器名称").padding(.leading, 8).frame(width: 160, alignment: .leading)
+                        Color(NSColor.separatorColor).frame(width: 1, height: 14)
+                        Text("Container ID").padding(.leading, 8).frame(width: 110, alignment: .leading)
+                        Color(NSColor.separatorColor).frame(width: 1, height: 14)
+                        Text("镜像").padding(.leading, 8).frame(minWidth: 160, maxWidth: 300, alignment: .leading)
+                        Color(NSColor.separatorColor).frame(width: 1, height: 14)
+                        Text("端口映射").padding(.leading, 8).frame(width: 200, alignment: .leading)
+                        Color(NSColor.separatorColor).frame(width: 1, height: 14)
+                        Text("CPU (%)").padding(.trailing, 8).frame(width: 80, alignment: .trailing)
+                        Color(NSColor.separatorColor).frame(width: 1, height: 14)
+                        Text("内存").padding(.trailing, 8).frame(width: 90, alignment: .trailing)
+                        Color(NSColor.separatorColor).frame(width: 1, height: 14)
+                        Text("操作").frame(width: 80, alignment: .center)
+                        Spacer(minLength: 0)
+                    }
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .padding(.vertical, 4)
+                    .padding(.horizontal)
+                    .background(.thinMaterial)
+                    
+                    Divider()
+                    
+                    if filteredContainers.isEmpty {
+                        VStack {
+                            Image(systemName: "shippingbox")
+                                .font(.system(size: 40))
+                                .foregroundColor(.gray.opacity(0.5))
+                            Text("未发现 Docker 容器")
+                                .font(.callout)
+                                .foregroundColor(.gray)
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color(NSColor.controlBackgroundColor))
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                ForEach(filteredContainers) { container in
+                                    DockerRowView(container: container, scanner: scanner, containerToStop: $containerToStop, showStopAlert: $showStopAlert, containerToUpdate: $containerToUpdate, showUpdateAlert: $showUpdateAlert)
+                                    Divider()
+                                }
+                            }
+                        }
+                        .background(Color(NSColor.controlBackgroundColor))
                     }
                 }
-                .background(Color(NSColor.controlBackgroundColor))
+                .frame(width: max(geo.size.width, minTableWidth), height: geo.size.height, alignment: .topLeading)
             }
         }
         .alert("确定要停止此容器吗？", isPresented: $showStopAlert) {
@@ -78,6 +91,18 @@ struct DockerContainerListView: View {
                 Text("你确定要停止“\(container.name)”吗？")
             }
         }
+        .alert("更新容器镜像", isPresented: $showUpdateAlert) {
+            Button("更新", role: .destructive) {
+                if let container = containerToUpdate {
+                    scanner.upgradeDockerContainer(container)
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            if let container = containerToUpdate {
+                Text("将拉取最新镜像并重建容器「\(container.name)」。⚠️ 容器会短暂停止后重新启动，数据卷和配置保留。")
+            }
+        }
     }
 }
 
@@ -86,6 +111,8 @@ struct DockerRowView: View {
     @ObservedObject var scanner: RadarScanner
     @Binding var containerToStop: DockerContainer?
     @Binding var showStopAlert: Bool
+    @Binding var containerToUpdate: DockerContainer?
+    @Binding var showUpdateAlert: Bool
     @State private var isHovered = false
     @State private var isPlayHovered = false
     @State private var isStopHovered = false
@@ -115,8 +142,10 @@ struct DockerRowView: View {
             Text(container.name)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
                 .padding(.leading, 8)
-                .frame(width: 140, alignment: .leading)
+                .frame(width: 160, alignment: .leading)
                 
             Spacer().frame(width: 1)
             
@@ -143,13 +172,27 @@ struct DockerRowView: View {
             Spacer().frame(width: 1)
             
             // Image
-            Text(container.image)
-                .font(.system(size: 11))
-                .foregroundColor(.primary.opacity(0.8))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .padding(.leading, 8)
-                .frame(minWidth: 140, maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                Text(container.image)
+                    .font(.system(size: 11))
+                    .foregroundColor(.primary.opacity(0.8))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if container.isPullingImage {
+                    ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
+                } else if container.imageUpdatable {
+                    Button(action: { containerToUpdate = container; showUpdateAlert = true }) {
+                        Text("可更新")
+                            .font(.system(size: 9, weight: .semibold)).foregroundColor(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(Color.orange).clipShape(Capsule())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .help("点击更新：拉取新镜像并重建容器")
+                }
+            }
+            .padding(.leading, 8)
+            .frame(minWidth: 160, maxWidth: 300, alignment: .leading)
             
             Spacer().frame(width: 1)
             
@@ -186,7 +229,7 @@ struct DockerRowView: View {
                 }
             }
             .padding(.leading, 8)
-            .frame(width: 220, alignment: .leading)
+            .frame(width: 200, alignment: .leading)
                 
             Spacer().frame(width: 1)
             
@@ -245,6 +288,7 @@ struct DockerRowView: View {
                 }
             }
             .frame(width: 80, alignment: .center)
+            Spacer(minLength: 0)
         }
         .padding(.vertical, 6)
         .padding(.horizontal)

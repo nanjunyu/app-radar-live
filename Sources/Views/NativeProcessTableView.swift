@@ -11,6 +11,9 @@ class ProcessTableViewController: NSViewController, NSTableViewDelegate, NSTable
     private var searchText: String = ""
     private var isUpdatingData = false
     
+    // 用户真正点击选中某行时的回调（数据刷新不会触发，避免反馈循环）
+    var onSelectionChanged: ((Int?) -> Void)?
+    
     // Pre-cached system symbol images (created once, reused forever)
     private lazy var desktopIcon: NSImage? = {
         NSImage(systemSymbolName: "macwindow", accessibilityDescription: nil)?
@@ -40,7 +43,7 @@ class ProcessTableViewController: NSViewController, NSTableViewDelegate, NSTable
     // Pre-cached NSColor for tags
     private lazy var tagColors: [ProcessTag: NSColor] = {
         var colors: [ProcessTag: NSColor] = [:]
-        for tag in [ProcessTag.system, .desktop, .docker, .node, .brew] {
+        for tag in [ProcessTag.system, .desktop, .docker, .node, .brew, .appStore, .brewCask, .git] {
             colors[tag] = NSColor(tag.color)
         }
         return colors
@@ -137,7 +140,8 @@ class ProcessTableViewController: NSViewController, NSTableViewDelegate, NSTable
         }
         
         isUpdatingData = false
-        NotificationCenter.default.post(name: NSNotification.Name("NativeTableSelectionChanged"), object: nil)
+        // 注意：此处不再发出选择变更通知。数据刷新属于程序行为，
+        // 若在此通知会回写绑定 → 触发 SwiftUI 重渲染 → 再次 update → 死循环。
     }
     
     // MARK: - NSTableViewDataSource
@@ -242,8 +246,9 @@ class ProcessTableViewController: NSViewController, NSTableViewDelegate, NSTable
     }
     
     func tableViewSelectionDidChange(_ notification: Notification) {
+        // 仅当是用户交互（而非程序刷新数据）导致的选择变化时才回调
         if !isUpdatingData {
-            NotificationCenter.default.post(name: NSNotification.Name("NativeTableSelectionChanged"), object: nil)
+            onSelectionChanged?(selectedPID)
         }
     }
     
@@ -259,17 +264,26 @@ struct NativeProcessTableView: NSViewControllerRepresentable {
     var searchText: String
     @Binding var selectedPID: Int?
     
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    
     func makeNSViewController(context: Context) -> ProcessTableViewController {
         let vc = ProcessTableViewController()
-        NotificationCenter.default.addObserver(forName: NSNotification.Name("NativeTableSelectionChanged"), object: nil, queue: .main) { _ in
-            DispatchQueue.main.async {
-                self.selectedPID = vc.selectedPID
+        // 用户点击行 → 回写绑定，但仅在值真正变化时写入，彻底打断反馈循环
+        vc.onSelectionChanged = { pid in
+            if context.coordinator.parent.selectedPID != pid {
+                context.coordinator.parent.selectedPID = pid
             }
         }
         return vc
     }
     
     func updateNSViewController(_ nsViewController: ProcessTableViewController, context: Context) {
+        context.coordinator.parent = self
         nsViewController.update(processes: processes, searchText: searchText)
+    }
+    
+    class Coordinator {
+        var parent: NativeProcessTableView
+        init(_ parent: NativeProcessTableView) { self.parent = parent }
     }
 }
