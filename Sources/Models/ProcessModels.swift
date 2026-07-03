@@ -4,15 +4,20 @@ import Foundation
 
 // 1. Activity Monitor (Processes)
 enum ProcessTag: String, Comparable {
+    case appStore = "App Store"
+    case brewCask = "Homebrew"
     case desktop = "Desktop"
     case node = "Node"
     case docker = "Docker"
-    case brew = "Homebrew"
+    case brew = "Homebrew CLI"
+    case git = "Git 项目"
     case system = "System"
     
     var color: Color {
         switch self {
-        case .desktop: return .blue; case .node: return .green; case .docker: return .cyan; case .brew: return .orange; case .system: return .gray
+        case .appStore: return .pink; case .brewCask: return .orange; case .desktop: return .blue
+        case .node: return .green; case .docker: return .cyan; case .brew: return .orange
+        case .git: return .purple; case .system: return .gray
         }
     }
     static func < (lhs: ProcessTag, rhs: ProcessTag) -> Bool { lhs.rawValue < rhs.rawValue }
@@ -38,10 +43,13 @@ struct SysProcess: Identifiable, Equatable {
     
     var kindStr: String {
         switch tag {
+        case .appStore: return "App Store"
+        case .brewCask: return "Homebrew"
         case .desktop: return "App"
         case .node: return "Node"
         case .docker: return "Docker"
         case .brew: return "Homebrew"
+        case .git: return "Git"
         case .system: return "System"
         }
     }
@@ -59,6 +67,8 @@ struct DockerContainer: Identifiable, Equatable {
     let ports: String
     let cpu: String
     var mem: String = "-"
+    var imageUpdatable: Bool = false   // 镜像有新版本（本地 digest 与远程不一致）
+    var isPullingImage: Bool = false   // 正在 docker pull 更新镜像
     
     var isRunning: Bool {
         status.lowercased().hasPrefix("up")
