@@ -48,7 +48,11 @@ if [ -f "logo.png" ]; then
     # Also ship a normalized PNG so the app can set its Dock icon at runtime
     cp "${BASE_PNG}" "${CONTENTS_DIR}/Resources/logo.png"
     rm -f "${BASE_PNG}"
-    echo "✅ App icon generated."
+    
+    # Generate the menu bar template icon matching the app's real logo
+    python3 tools/make_menu_icon.py logo.png "${CONTENTS_DIR}/Resources/logo_menu.png" badge 18
+    
+    echo "✅ App icon and menu bar icons generated."
 else
     echo "⚠️  logo.png not found, skipping icon generation."
 fi

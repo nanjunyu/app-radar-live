@@ -15,6 +15,7 @@ class RadarScanner: ObservableObject {
     @Published var hasNpm = false   // 环境是否有 npm，决定是否显示「Node 全局包」菜单
     @Published var hasGit = false   // 是否有 git，决定是否显示「Git 项目」菜单
     @Published var hasOther = false // 是否探测到「其他」来源（CLI 工具 / 独立应用），决定是否显示菜单
+    @Published var selectedSidebarItem: SidebarItem? = .monitorAll
     
     var refreshTimer: Timer?
     var updatesTimer: Timer?         // 后台周期性重扫待更新（各渠道），与进程刷新分开
