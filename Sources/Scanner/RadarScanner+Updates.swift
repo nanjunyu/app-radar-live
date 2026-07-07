@@ -18,18 +18,16 @@ extension RadarScanner {
             // 三个渠道互相独立，并发扫描；整体耗时取决于最慢的一个，而非三者之和
             let group = DispatchGroup()
             let queue = DispatchQueue(label: "radar.updates.scan", attributes: .concurrent)
-            var appStore: (updates: [RadarUpdateApp], installed: [RadarUpdateApp]) = ([], [])
             var brew: (updates: [RadarUpdateApp], installed: [RadarUpdateApp]) = ([], [])
             var node: (updates: [RadarUpdateApp], installed: [RadarUpdateApp]) = ([], [])
             let hasNpm = Environment.hasNpm
             
-            queue.async(group: group) { appStore = self.scanAppStoreChannel() }
             queue.async(group: group) { brew = self.scanBrewChannel() }
             queue.async(group: group) { if hasNpm { node = self.scanNodeChannel() } }
             group.wait()
             
-            let scannedUpdates = appStore.updates + brew.updates + node.updates
-            let scannedInstalled = appStore.installed + brew.installed + node.installed
+            let scannedUpdates = brew.updates + node.updates
+            let scannedInstalled = brew.installed + node.installed
             let allBrewApps = brew.updates + brew.installed
             
             DispatchQueue.main.async {
@@ -100,66 +98,7 @@ extension RadarScanner {
         }
     }
     
-    // === App Store 渠道：mas outdated（待更新） + mas list（已安装） ===
-    private func scanAppStoreChannel() -> (updates: [RadarUpdateApp], installed: [RadarUpdateApp]) {
-        var updates: [RadarUpdateApp] = []
-        // mas outdated 输出示例: 682658836  库乐队  (10.4.12 -> 10.4.14)
-        let masOutput = ProcessRunner.runCommand("mas outdated")
-        for line in masOutput.components(separatedBy: .newlines) {
-            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-            if trimmedLine.isEmpty { continue }
-            let firstSplit = trimmedLine.split(separator: " ", maxSplits: 1).map(String.init)
-            guard firstSplit.count == 2, firstSplit[0].allSatisfy({ $0.isNumber }) else { continue }
-            let appId = firstSplit[0]
-            var remainder = firstSplit[1].trimmingCharacters(in: .whitespaces)
-            var currentVer: String? = nil
-            var latestVer: String? = nil
-            if let openParen = remainder.range(of: "("), let closeParen = remainder.range(of: ")", options: .backwards) {
-                let versionPart = String(remainder[openParen.upperBound..<closeParen.lowerBound])
-                let verComponents = versionPart.components(separatedBy: "->")
-                if verComponents.count == 2 {
-                    currentVer = verComponents[0].trimmingCharacters(in: .whitespaces)
-                    latestVer = verComponents[1].trimmingCharacters(in: .whitespaces)
-                }
-                remainder = String(remainder[remainder.startIndex..<openParen.lowerBound])
-            }
-            let appName = remainder.trimmingCharacters(in: .whitespaces)
-            guard !appName.isEmpty else { continue }
-            let app = RadarUpdateApp(name: appName, category: .appStore)
-            app.appId = appId
-            app.currentVersion = currentVer
-            app.latestVersion = latestVer
-            self.fetchAppStoreMetadata(for: app)
-            updates.append(app)
-        }
-        let updateNames = Set(updates.map { $0.name })
-        var installed: [RadarUpdateApp] = []
-        let masList = ProcessRunner.runCommand("mas list")
-        for line in masList.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty { continue }
-            let parts = trimmed.split(separator: " ", maxSplits: 1).map(String.init)
-            guard parts.count == 2, parts[0].allSatisfy({ $0.isNumber }) else { continue }
-            // 格式: "836500024  微信  (4.1.10)"
-            var nameAndVer = parts[1].trimmingCharacters(in: .whitespaces)
-            var ver: String? = nil
-            if let openP = nameAndVer.range(of: "("), let closeP = nameAndVer.range(of: ")", options: .backwards) {
-                ver = String(nameAndVer[openP.upperBound..<closeP.lowerBound]).trimmingCharacters(in: .whitespaces)
-                nameAndVer = String(nameAndVer[nameAndVer.startIndex..<openP.lowerBound])
-            }
-            let name = nameAndVer.trimmingCharacters(in: .whitespaces)
-            if name.isEmpty || updateNames.contains(name) { continue }
-            let app = RadarUpdateApp(name: name, category: .appStore)
-            app.appId = parts[0]
-            app.currentVersion = ver
-            app.latestVersion = ver
-            app.upgraded = true
-            self.fetchAppStoreMetadata(for: app)
-            installed.append(app)
-        }
-        
-        return (updates, installed)
-    }
+
     
     // === Homebrew 渠道：brew outdated --json（待更新） + brew list（已安装） ===
     private func scanBrewChannel() -> (updates: [RadarUpdateApp], installed: [RadarUpdateApp]) {
@@ -314,65 +253,7 @@ extension RadarScanner {
         for app in updates { app.ignored = keys.contains(app.ignoreKey) }
     }
     
-    private func fetchAppStoreMetadata(for app: RadarUpdateApp) {
-        guard let appId = app.appId else { return }
-        let base = "https://itunes.apple.com/lookup?id=\(appId)&country=cn"
-        // mas 给的是 Mac App Store 应用 ID。优先按 macOS 维度查询，
-        // 拿到与官方 Mac App Store 一致的体积/分级（不加 entity 默认会返回 iOS 版数据）；
-        // 若该 app 无 macOS 版本（结果为空），再回退到默认查询。
-        lookup(urlString: base + "&entity=macSoftware", for: app) { [weak self] success in
-            if !success {
-                self?.lookup(urlString: base, for: app, completion: nil)
-            }
-        }
-    }
-    
-    private func lookup(urlString: String, for app: RadarUpdateApp, completion: ((Bool) -> Void)?) {
-        guard let url = URL(string: urlString) else { completion?(false); return }
-        URLSession.shared.dataTask(with: url) { data, _, _ in
-            guard let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let results = json["results"] as? [[String: Any]],
-                  let first = results.first else {
-                completion?(false)
-                return
-            }
-            DispatchQueue.main.async { self.applyMetadata(first, to: app) }
-            completion?(true)
-        }.resume()
-    }
-    
-    private func applyMetadata(_ first: [String: Any], to app: RadarUpdateApp) {
-        if let trackName = first["trackName"] as? String, !trackName.isEmpty {
-            app.displayName = trackName
-        }
-        if let artworkUrl100 = first["artworkUrl512"] as? String ?? first["artworkUrl100"] as? String {
-            app.logoUrl = URL(string: artworkUrl100)
-        }
-        app.developer = first["sellerName"] as? String
-        app.releaseNotes = first["releaseNotes"] as? String
-        app.descriptionText = first["description"] as? String
-        app.averageUserRating = first["averageUserRating"] as? Double
-        app.userRatingCount = first["userRatingCount"] as? Int
-        app.contentRating = first["trackContentRating"] as? String ?? first["contentAdvisoryRating"] as? String
-        app.primaryGenre = (first["genres"] as? [String])?.first ?? first["primaryGenreName"] as? String
-        app.price = first["formattedPrice"] as? String
-        app.minimumOsVersion = first["minimumOsVersion"] as? String
-        // iTunes 返回的 version 即为最新版本，比 mas 的更权威
-        if let ver = first["version"] as? String, !ver.isEmpty {
-            app.latestVersion = ver
-        }
-        // 当前版本发布日期，如 2026-06-16T06:56:16Z -> 2026-06-16
-        if let dateStr = first["currentVersionReleaseDate"] as? String {
-            app.releaseDate = String(dateStr.prefix(10))
-        }
-        if let lang = first["languageCodesISO2A"] as? [String] { app.languages = lang }
-        if let screenshots = first["screenshotUrls"] as? [String] { app.screenshotUrls = screenshots }
-        if let size = first["fileSizeBytes"] as? String, let s = Int64(size) {
-            let formatter = ByteCountFormatter()
-            app.sizeStr = formatter.string(fromByteCount: s)
-        }
-    }
+
     
     // 跨扫描周期稳定匹配同一应用的标识键：
     // App Store 用 appId（数字 ID，如 "497799835"），其余渠道用 category + name
