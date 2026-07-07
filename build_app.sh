@@ -50,7 +50,7 @@ if [ -f "logo.png" ]; then
     rm -f "${BASE_PNG}"
     
     # Generate the menu bar template icon matching the app's real logo
-    python3 tools/make_menu_icon.py logo.png "${CONTENTS_DIR}/Resources/logo_menu.png" badge 18
+    python3 tools/make_menu_icon.py logo.png "${CONTENTS_DIR}/Resources/logo_menu.png" badge 36
     
     echo "✅ App icon and menu bar icons generated."
 else
