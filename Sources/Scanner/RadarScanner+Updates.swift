@@ -78,6 +78,20 @@ extension RadarScanner {
                 self.isScanningUpdates = false
                 self.restoreIgnoreState()
                 self.refreshDockBadge()
+                
+                // 检查是否有新增待更新的应用并推送通知
+                let currentPending = Set(self.updates.filter { !$0.upgraded && !$0.ignored }.map { $0.name })
+                let newUpdates = currentPending.subtracting(self.lastNotifiedUpdates)
+                if !newUpdates.isEmpty {
+                    let totalCount = currentPending.count
+                    let namesStr = newUpdates.prefix(3).map { $0 }.joined(separator: ", ")
+                    let suffix = newUpdates.count > 3 ? " 等" : ""
+                    self.sendNotification(
+                        title: "🎉 发现软件更新",
+                        body: "检测到新发布可更新的包: \(namesStr)\(suffix)（共 \(totalCount) 项待更新）。"
+                    )
+                }
+                self.lastNotifiedUpdates = currentPending
                 // 刷新 Node 包运行状态（启停按钮）
                 self.refreshNodeServiceStatus()
                 // 异步回填 Homebrew 元数据（~2s，不阻塞 UI）

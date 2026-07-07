@@ -440,6 +440,12 @@ extension RadarScanner {
                 self.live.diskReadBytes = disk.read
                 self.live.diskWriteBytes = disk.write
                 
+                // 触发 CPU 与内存压力预警检测
+                let currentCpu = self.live.cpuUser + self.live.cpuSys
+                let usedMem = self.live.appMem + self.live.wiredMem + self.live.compressedMem
+                let currentMemRatio = self.live.physicalMem > 0 ? (usedMem / self.live.physicalMem) : 0.0
+                self.checkResourceAlerts(cpu: currentCpu, memRatio: currentMemRatio)
+                
                 self.live.isScanningProcesses = false
                 
                 self.refreshNodeServiceStatus()

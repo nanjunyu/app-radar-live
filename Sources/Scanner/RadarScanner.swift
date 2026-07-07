@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Foundation
+import UserNotifications
 
 // MARK: - Scanner
 class RadarScanner: ObservableObject {
@@ -21,6 +22,40 @@ class RadarScanner: ObservableObject {
     var updatesTimer: Timer?         // 后台周期性重扫待更新（各渠道），与进程刷新分开
     private var hasStartedAutoRefresh = false   // 防止启动扫描被多次触发
     var iconCache: [pid_t: NSImage] = [:]
+    
+    // 通知跟踪状态，防止频繁重复推送
+    var lastNotifiedUpdates: Set<String> = []
+    private var lastCpuAlertTime: Date?
+    private var lastMemAlertTime: Date?
+    
+    func sendNotification(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+    
+    func checkResourceAlerts(cpu: Double, memRatio: Double) {
+        let now = Date()
+        let cooldown: TimeInterval = 600 // 10分钟冷却时间，避免打扰用户
+        
+        if cpu >= 85.0 {
+            if lastCpuAlertTime == nil || now.timeIntervalSince(lastCpuAlertTime!) > cooldown {
+                lastCpuAlertTime = now
+                sendNotification(title: "⚠️ CPU 负载过高", body: String(format: "当前 CPU 占用率达 %.1f%%，系统运行负荷较大。", cpu))
+            }
+        }
+        
+        if memRatio >= 0.90 {
+            if lastMemAlertTime == nil || now.timeIntervalSince(lastMemAlertTime!) > cooldown {
+                lastMemAlertTime = now
+                sendNotification(title: "⚠️ 内存压力过载", body: String(format: "当前内存使用率已达 %.1f%%，系统面临内存吃紧压力，建议清理后台应用。", memRatio * 100.0))
+            }
+        }
+    }
     
     // MARK: 扫描内部状态（非 @Published，仅用于调度，避免触发 UI 刷新）
     // 防重入标志：覆盖手动 + 自动刷新，杜绝扫描任务堆叠导致 CPU 飙升

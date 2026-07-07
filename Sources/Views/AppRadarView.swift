@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UserNotifications
 
 // MARK: - Main View
 struct AppRadarView: View {
@@ -126,6 +127,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         
         // 3) 进程启动即开始扫描所有待更新（不依赖主窗口是否显示），并启动后台周期重扫
         scanner.startAutoRefresh()
+        
+        // 4) 请求通知权限，用于推送版本更新和 CPU/内存资源异常报警
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
     
     @objc private func togglePopover(_ sender: Any?) {
