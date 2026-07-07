@@ -118,11 +118,37 @@ Sources/
 
 ## 💬 常见问题 (FAQ)
 
-**Q: 这个工具收费吗？**
-完全免费且基于 **MIT 协议**开源。您可以自由修改、定制或进行二次开发。
+**Q: 这个工具是收费的吗？**
+完全免费，且永久开源。AppRadar Live 基于 **MIT 协议**发布，你可以自由查看源代码、修改和分发。我们非常欢迎二次开发与商业用途，无需任何授权或付费。
 
-**Q: 我的数据会被上传吗？**
-绝对安全。AppRadar-Live 是**纯本地工具**，无任何联网上传行为，所有扫描、端口抓取均在您的 Mac 本地执行。
+**Q: 这个工具安全吗？会上传我的数据吗？**
+绝对安全。AppRadar Live 是一个**纯本地工具**，不会进行任何形式的数据联网上传。所有扫描、监控、分析均在你的 Mac 本地完成，不连接任何远程服务器，不收集任何用户信息。你的数据始终只属于你。
+
+**Q: 支持哪些 macOS 版本？**
+AppRadar Live 支持 **macOS 13 Ventura 及以上**版本，同时提供 Apple Silicon（M 系列芯片）与 Intel 芯片两个原生版本，均可在对应架构上获得最佳性能表现。
+
+**Q: 运行时需要授予哪些权限？**
+AppRadar Live 仅需最小必要权限：
+- 🔍 **本地文件读取权限**：用于扫描 Homebrew、npm 等安装目录，识别已安装的工具
+- ⚙️ **系统进程读取权限**：用于展示 CPU / 内存 / 端口等进程指标
+- 🐳 **Docker Socket 访问权限**（可选）：仅在你使用 Docker 管理功能时需要
+
+所有权限均通过 macOS 标准系统授权弹窗申请，无任何隐藏行为。
+
+**Q: 不支持的安装来源能检测到吗？**
+目前支持的安装来源包括：**App Store、Homebrew、Node.js / npm、Git 克隆项目、Docker 容器**，以及常见的第三方 DMG 安装包。对于极少数高度定制化的安装方式，可能暂时无法识别，我们会在后续版本持续扩展支持范围，欢迎在 GitHub Issues 中提交你的需求。
+
+**Q: 遇到 Bug 或问题，怎么反馈？**
+请前往 [GitHub Issues](https://github.com/nanjunyu/app-radar-live/issues) 提交问题报告，建议附上以下信息以便快速定位：
+- 你的 macOS 版本和芯片类型（M 系列 / Intel）
+- 问题的复现步骤
+- 相关的截图或错误日志
+
+**Q: 怎么参与贡献或共同开发？**
+非常欢迎！你可以通过以下方式参与：
+- 💡 在 [GitHub Issues](https://github.com/nanjunyu/app-radar-live/issues) 提交功能建议或 Bug 报告
+- 🔧 Fork 仓库后提交 [Pull Request](https://github.com/nanjunyu/app-radar-live/pulls)，我们会认真 Review 每一个 PR
+- ⭐ 给项目点个 Star，帮助更多人发现这个工具
 
 ---
 
