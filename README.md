@@ -1,65 +1,97 @@
 # 📡 AppRadar-Live
 
-**AppRadar-Live** 是一款专为 macOS 开发者设计的**本地实时运行应用检测与更新雷达**。它常驻于您的 Mac 菜单栏，实时帮您看护当前正在运行的开发服务、容器与系统依赖，并提供安全的更新引导和强杀端口功能。
+**AppRadar-Live** 是一款专为 macOS 开发者和 AI 爱好者设计的**多源应用管理与轻量系统监视器**。它能全自动扫描您电脑上来自 App Store、Homebrew、Node.js / npm、Git 本地仓库及 Docker 容器等多种渠道的工具与服务，为您提供一键式状态监控、进程管理以及全自动的镜像/包升级服务。
 
 ---
 
-## 💡 我们要解决的痛点 (Why AppRadar-Live?)
+## 💡 研发背景与痛点
 
-作为开发者，Mac 本地安装的程序来源极其复杂，例如：
-1. **Mac App Store** 里的桌面软件
-2. **Homebrew** 安装的系统工具和 Casks 桌面应用
-3. 从 GitHub **克隆代码并一键脚本启动** 的各种 AI 开源项目
-4. 通过 **npm 全局安装** 或在本地运行的 Node 进程
-5. 跑在 **Docker** 容器里的各种数据库和镜像服务
+随着 **AI vibe coding** 的兴起，越来越多的人开始在 macOS 上频繁使用和安装各类 AI 工具（如 OpenClaw、HermesAgent 等）。这些工具底层依赖复杂的开发环境（如 Python、Node.js 等），且安装来源极其多样：
+* 官网二进制安装包直接下载（DMG/PKG）
+* 克隆源代码到本地进行编译与运行（Git 仓库）
+* 通过 NPM 一键全局安装（Node.js）
+* 部署在本地的 Docker 容器中
+* 通过 Homebrew 等包管理器安装
 
-### 痛点问题：
-* **难以察觉更新**：除 App Store 外，Git 克隆项目、Docker 容器以及 npm 全局工具是否有更新，用户极难感知。
-* **臃肿且过载的检测**：市面上的工具往往采用“全量扫描”，不仅检测极慢，还会列出几十个平时根本不常用的依赖更新，带来严重的信息焦虑。
-* **直接升级的高风险**：对于本地的 Git 仓库和 AI 项目，直接静默升级极易导致代码冲突或环境崩塌。
-* **端口占用的尴尬**：开发者经常遇到 `Port 3000 is already in use`，却不知道到底是后台哪个 Node 或 Python 进程占用了它，不得不频繁使用命令行排查。
+对于普通用户或小白开发者而言，这带来了极高的管理和维护成本：
+1. **难以追踪更新**：各渠道工具更新频繁，难以一一知晓其最新特性与升级包状态。
+2. **升级操作繁琐**：不同来源需要敲不同的终端升级命令，遇到冲突难以简单排查。
+3. **工具散落难寻**：多项目同时运行时，忘记本地服务占用哪个端口，或是想临时启停服务，原生活动监视器信息过载且不支持端口搜索。
 
----
-
-## ⚡ V1 核心功能 (当前版本)
-
-AppRadar-Live 的首个版本（V1）立足于**“只检测、给引导、防冲突、可强杀”**的核心理念：
-
-1. **动态雷达监控（仅关注运行中程序）**：
-   * **端口逆向追踪**：后台动态扫描 TCP 监听端口，拿到 PID 后逆向提取其工作目录（CWD）。如果该目录包含 `.git` 且在工作区中，则判定其为“活跃项目”。
-   * **Docker 状态过滤**：仅对 `Status: Up`（正在运行）的容器镜像进行新版本 Digest 检测。
-   * 告别耗时的全量扫描，整机检测在 **3-5 秒**内极速完成。
-2. **安全的“复制指令”升级引导**：
-   * 发现更新时，**不执行强制/直接升级**，以规避代码冲突风险。
-   * 软件以卡片形式提供更新日志，并生成对应的终端更新脚本，支持**一键复制**（例如：`cd path && git pull` 或 `docker compose pull`），引导您手动执行安全更新。
-3. **⚡️ 进程强杀 (解决端口占用)**：
-   * 每一个运行中的 Git / npm 卡片均配备红色的强杀按钮。点击即可通过 `kill -9` 瞬间终止进程并释放端口。
-4. **模拟 macOS 菜单栏 UI**：
-   * 采用 **Sleek Dark Mode (深色微光主题)** 和 **Glassmorphism (玻璃纳态)** 的毛玻璃下拉面板设计，完美仿真 macOS 顶部状态栏及雷达弹出泡交互。
-   * 界面**自动跟随系统深色/浅色模式**切换，夜间使用不刺眼。
-
-5. **版本更新中心（多渠道升级管理）**：
-   * **App Store 更新**：通过 `mas` 命令侦测 Mac App Store 待更新应用，并调用 iTunes 接口回填官方元数据——应用图标、完整名称、开发者、版本号（当前 → 最新）、发布日期、年龄分级、类别、支持语言、大小、更新说明（新功能）与预览截图，力求与官方商店保持一致的呈现。
-   * **依赖库更新**：通过 `brew outdated` 侦测 Homebrew 待更新的 formula / cask。
-   * 侧边栏分流展示，App Store 与依赖库各自独立列表，点击卡片可查看应用详情。
+为了让大家能够**零门槛地使用并统一管理最新的 AI 工具与本地服务**，享受最新特性，AppRadar-Live 应运而生。
 
 ---
 
-## 🔧 依赖工具
+## ⚡ 核心功能特色
 
-桌面端在运行时会调用以下命令行工具，请确保已安装：
+### 1. 一键式多源应用与包管理
+支持全自动扫描并根据电脑上安装的开发环境，自动识别出对应项目的安装情况、端口占用及进程状态。
+* **多源集成**：集成 App Store、Homebrew、Node.js、Git 及常见第三方安装包，一键式检测更新与卸载。
+* **路径与进程控制**：直观展示每个应用的启动路径，支持在界面上一键停止或重启对应进程。
+* **便捷控制台访问**：再也不用死记硬背本地服务占用了哪个端口，在界面上点击链接即可一键直达应用背后的控制台。
 
-* **`mas`**：用于读取 App Store 更新列表，`brew install mas`
-* **`brew`**：用于读取 Homebrew 更新
-* **`docker`**：用于读取容器运行状态与统计（可选）
+### 2. 轻量化进程监控 + 端口定位
+深度优化进程管理体验，专门筛选出 vibe coding 用户和小白开发者最关心的核心指标：
+* **核心指标**：直观展示 CPU 使用率、CPU 时间、内存占用及线程数。
+* **独家端口定位**：原生资源管理器不提供端口数据，AppRadar-Live 支持直观列出并搜索每个进程占用的本地端口。当您忘记某个项目的访问地址时，可在列表中快速定位。
+
+### 3. 极简 Docker 容器管理
+如果您的 AI 服务或数据库运行在 Docker 中，无需打开复杂的 Docker Desktop，即可在软件内直接操控：
+* **状态透视**：直观展示镜像名称、容器 ID、CPU / 内存实时占用情况。
+* **快捷控制**：支持一键启动与停止容器。
+* **一键镜像更新**：自动检测新版镜像并一键拉取（Pull），软件会自动重新启动容器，让升级无缝衔接。
+* **端口跳转**：清晰展示容器的端口映射，支持一键在浏览器中打开访问。
+
+### 4. 智能通知与个性化体验
+* **防骚扰智能通知**：仅在检测到新更新包时推送提醒；CPU 占用（≥85%）与内存压力（≥90%）过载报警内置 10 分钟 Cooldown 冷却期，杜绝高频通知轰炸。
+* **个性化主题**：软件内置 5 种不同主题配色方案，支持自由切换以满足不同审美偏好。
 
 ---
 
-## 🚀 极速启动与使用
+## 📸 界面预览
 
-### 方式一：原生桌面应用（推荐）
+### 1. 资源监控雷达 (Resource Monitor)
+| 系统进程 CPU/内存与端口列表 | Docker 容器指标监控与启停 |
+| :---: | :---: |
+| ![系统进程](screenshots/monitor_processes.png) | ![Docker容器](screenshots/monitor_docker.png) |
 
-AppRadar-Live 的主体是一个 SwiftUI 原生 macOS 应用（Apple Silicon / arm64）。
+### 2. 多源更新管理 (Updates Management)
+| 多渠道更新总览列表 | App Store 应用详情展示 |
+| :---: | :---: |
+| ![更新列表](screenshots/update_list.png) | ![AppStore详情](screenshots/update_appstore.png) |
+
+| Node.js 全局包更新 | Git 本地项目雷达 |
+| :---: | :---: |
+| ![Node更新](screenshots/update_nodejs.png) | ![Git项目雷达](screenshots/update_git.png) |
+
+### 3. 应用详情与状态栏
+| 独立应用详情页 (如 QQ) | CLI 终端工具详情 (如 firecrawl-cli) |
+| :---: | :---: |
+| ![App详情](screenshots/detail_app.png) | ![CLI详情](screenshots/detail_cli.png) |
+
+| 菜单栏常驻浮窗 (Popover) | 智能防骚扰通知中心 |
+| :---: | :---: |
+| ![菜单栏浮窗](screenshots/tray_popover.png) | ![智能通知](screenshots/tray_notification.png) |
+
+| 主题配色切换设置 |
+| :---: |
+| ![主题设置](screenshots/tray_settings.png) |
+
+---
+
+## 🔧 依赖运行工具
+
+AppRadar-Live 桌面端在运行时会调用以下命令行工具获取数据，请确保已安装：
+* **`mas`**：用于读取 App Store 更新列表，可通过 `brew install mas` 安装。
+* **`brew`**：用于读取 Homebrew 包更新状态。
+* **`docker`**：用于读取容器运行状态与统计（可选）。
+
+---
+
+## 🚀 编译与启动
+
+### 原生 macOS 桌面应用 (SwiftUI)
+AppRadar-Live 主体是一个 SwiftUI 原生 macOS 应用（适用于 Apple M 系列及 Intel 芯片）。
 
 ```bash
 cd app-radar-live
@@ -67,64 +99,33 @@ cd app-radar-live
 open app-radar-live.app
 ```
 
-启动后：
-* 左侧边栏切换「所有进程」「App Store 更新」「依赖库更新」「设置」。
-* 进程列表首次加载时会显示扫描中的指示器，数据每 5 秒自动刷新。
-* 「版本更新中心」点击应用卡片可查看详情，支持一键升级引导。
-
-### 方式二：本地 Web 雷达（早期形态）
-
-仓库内同时保留了一个 FastAPI Web 版后端，可用于浏览器中的端口逆向追踪演示。
-
-```bash
-cd app-radar-live
-pip install -r requirements.txt
-python main.py
-```
-*(服务将启动并监听在 `http://127.0.0.1:8045`)*
-
-在浏览器中打开 **`http://localhost:8045`** 即可使用。
+启动后，您可以在顶部菜单栏或左侧边栏便捷控制您的全部服务环境，数据默认每 5 秒自动刷新。
 
 ---
 
-## 🏗️ 项目结构
+## 🏗️ 项目结构说明
 
-桌面端源码按职责分层组织在 `Sources/` 下，便于后续扩展各渠道的更新管理（Node / Docker 等）而无需改动主文件：
-
+本地 Swift 源码模块化划分如下：
 ```
 Sources/
-├── Core/                              # 通用工具
-│   ├── Extensions.swift               # Color(hex:) / NSImage 等扩展
-│   └── ProcessRunner.swift            # shell 命令执行封装
-├── Models/                            # 数据模型
-│   ├── ProcessModels.swift            # ProcessTag / SysProcess / DockerContainer
-│   ├── UpdateModels.swift             # UpdateCategory / RadarUpdateApp
-│   └── SidebarItem.swift              # 侧边栏路由枚举
-├── Scanner/                           # 核心扫描器（按职责拆成多个 extension）
-│   ├── RadarScanner.swift             # 类声明、状态属性、生命周期
-│   ├── RadarScanner+ProcessScan.swift # 进程与系统资源扫描
-│   ├── RadarScanner+Updates.swift     # 版本更新检测（App Store / Homebrew）
-│   ├── RadarScanner+Actions.swift     # 升级 / 强杀进程
-│   ├── RadarScanner+Formatting.swift  # 字节 / 内存 / 数字格式化
-│   └── RadarScanner+Docker.swift      # 容器启停操作
-└── Views/                             # SwiftUI 视图
-    ├── AppRadarView.swift             # 主窗口与侧边栏（@main 入口）
-    ├── ActivityMonitorView.swift      # 活动监视器
-    ├── NativeProcessTableView.swift   # 高性能 AppKit 进程表格
-    ├── UpdateCenterView.swift         # 版本更新中心（卡片 / 详情）
-    ├── SettingsView.swift             # 设置（主题）
-    └── DockerViews.swift              # Docker 容器列表
+├── Core/                              # 通用工具 (进程运行封装、Swift 扩展)
+├── Models/                            # 数据模型 (系统进程、容器、更新卡片)
+├── Scanner/                           # 核心扫描模块 (按扩展拆分：Docker、进程、多源检测)
+└── Views/                             # SwiftUI 界面组件 (侧边栏、主视图、更新中心、表格)
 ```
-
-> 提示：Swift 同一 module 内的文件无需互相 import，跨文件类型默认可见。新增更新渠道时，建议新增 `RadarScanner+<渠道>Updates.swift` 与对应视图文件，保持单一职责。
 
 ---
 
-## 🗺️ 未来终局路线图 (Roadmap)
+## 💬 常见问题 (FAQ)
 
-本工具致力于在开源社区长线迭代，未来将演进为真正的 Mac 桌面应用（使用 **Tauri + Rust** 框架包装）：
+**Q: 这个工具收费吗？**
+完全免费且基于 **MIT 协议**开源。您可以自由修改、定制或进行二次开发。
 
-* [ ] **深度运行监测**：除了端口，进一步显示运行程序的 CPU/内存消耗、基本元数据与完整启动路径。
-* [ ] **多形态客户端**：常驻顶部 Menu Bar 菜单栏，点击菜单栏小图标直接呼出本地系统面板。
-* [ ] **后台自动检测**：支持设定后台检测周期（如 1 小时/次），在有新版本时通过 macOS 系统原生弹窗（Notification）提醒。
-* [ ] **可配置白名单**：支持用户排除不需要检测的端口和 Docker 镜像。
+**Q: 我的数据会被上传吗？**
+绝对安全。AppRadar-Live 是**纯本地工具**，无任何联网上传行为，所有扫描、端口抓取均在您的 Mac 本地执行。
+
+---
+
+## 🤝 参与贡献
+
+欢迎通过提交 GitHub Issues 或 Pull Request 一起完善这个小工具，期待您的加入！
