@@ -58,7 +58,19 @@ struct ActivityMonitorView: View {
     }
     
     var body: some View {
-        VStack(spacing: 0) {
+        let usedMem = live.appMem + live.wiredMem + live.compressedMem
+        let memRatio = live.physicalMem > 0 ? (usedMem / live.physicalMem) : 0.0
+        let memColor: Color = {
+            if memRatio < 0.75 {
+                return .green
+            } else if memRatio < 0.90 {
+                return .orange
+            } else {
+                return .red
+            }
+        }()
+        
+        return VStack(spacing: 0) {
             // Top Toolbar Area
             HStack {
                 Text(selectedTab == "Docker" ? "Docker 容器" : "所有进程").font(.headline).foregroundColor(.gray)
@@ -259,7 +271,7 @@ struct ActivityMonitorView: View {
                             HStack(alignment: .top, spacing: 6) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     HStack { Text("物理内存：").foregroundColor(.secondary).frame(width: 80, alignment: .leading); Text(scanner.formatMemoryGB(live.physicalMem)).frame(width: 65, alignment: .trailing) }
-                                    HStack { Text("已使用内存：").foregroundColor(.secondary).frame(width: 80, alignment: .leading); Text(scanner.formatMemoryGB(live.appMem + live.wiredMem + live.compressedMem)).frame(width: 65, alignment: .trailing) }
+                                    HStack { Text("已使用内存：").foregroundColor(.secondary).frame(width: 80, alignment: .leading); Text(scanner.formatMemoryGB(live.appMem + live.wiredMem + live.compressedMem)).foregroundColor(memColor).frame(width: 65, alignment: .trailing) }
                                     HStack { Text("已缓存文件：").foregroundColor(.secondary).frame(width: 80, alignment: .leading); Text(scanner.formatMemoryGB(live.cachedFiles)).frame(width: 65, alignment: .trailing) }
                                     HStack { Text("已使用的交换：").foregroundColor(.secondary).frame(width: 80, alignment: .leading); Text(scanner.formatMemoryGB(live.swapUsed)).frame(width: 65, alignment: .trailing) }
                                 }.font(.system(size: 11))
