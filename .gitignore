@@ -4,11 +4,18 @@
 # Build outputs
 *.app/
 app-radar-live.app/
+release/
 
 # Python
 __pycache__/
 venv/
 .venv/
 
+# User config (use config.example.json as template)
+config.json
+
 # Kiro IDE local config
 .kiro/
+
+# Qoder skills (local only)
+.qoder/
