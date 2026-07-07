@@ -88,10 +88,34 @@ AppRadar-Live 桌面端在运行时会调用以下命令行工具获取数据，
 
 ---
 
-## 🚀 编译与启动
+## 📥 下载与安装
 
-### 原生 macOS 桌面应用 (SwiftUI)
-AppRadar-Live 主体是一个 SwiftUI 原生 macOS 应用（适用于 Apple M 系列及 Intel 芯片）。
+前往 [Releases 页面](https://github.com/nanjunyu/app-radar-live/releases) 下载最新版本的 `.dmg` 安装包：
+- **Apple Silicon (M1/M2/M3/M4)** → 下载 `arm64.dmg`
+- **Intel 芯片** → 下载 `x86_64.dmg`
+
+> 💡 不确定你的 Mac 是哪种芯片？点击左上角  → 关于本机 → 查看「芯片」或「处理器」信息。
+
+### ⚠️ 首次打开提示"无法验证开发者"的解决方法
+
+由于本应用未上架 App Store，macOS Gatekeeper 会阻止首次打开。请使用以下任一方式解决（仅需操作一次）：
+
+**方式一：右键打开**
+1. 在 Finder 中找到 `app-radar-live.app`
+2. 按住 `Control` 键点击（或右键点击）→ 选择「打开」
+3. 在弹出的对话框中再次点击「打开」
+
+**方式二：终端命令解除限制（推荐）**
+```bash
+xattr -cr /Applications/app-radar-live.app
+```
+执行后即可正常双击打开，后续不会再弹窗。
+
+---
+
+## 🚀 从源码编译
+
+如果你希望自行编译，AppRadar-Live 主体是一个 SwiftUI 原生 macOS 应用（适用于 Apple M 系列及 Intel 芯片）。
 
 ```bash
 cd app-radar-live
