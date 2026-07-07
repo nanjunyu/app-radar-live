@@ -3,22 +3,27 @@ from PIL import Image
 
 def process_badge(im):
     # Mode 1: badge (non-white becomes black, white becomes transparent)
-    # Target is 18x18. We'll do it with antialiasing.
-    # To keep it anti-aliased, we can first scale up, process, then scale down,
-    # or process pixel by pixel.
+    # Target is 36x36 (@2x). We'll do it with high quality anti-aliasing.
     im = im.convert('RGBA')
     width, height = im.size
     out = Image.new('RGBA', (width, height))
     for y in range(height):
         for x in range(width):
             r, g, b, a = im.getpixel((x, y))
-            # Distance from white
+            # Distance from pure white
             dist = (255-r) + (255-g) + (255-b)
-            if dist < 30: # close to white
+            
+            # Smooth transition for anti-aliasing:
+            # - dist < 15: pure background -> fully transparent
+            # - dist > 90: solid colored shape -> fully opaque black
+            # - 15 <= dist <= 90: edge transition -> semi-transparent black
+            if dist < 15:
                 out.putpixel((x, y), (0, 0, 0, 0))
-            else:
-                # keep original alpha, make color black
+            elif dist > 90:
                 out.putpixel((x, y), (0, 0, 0, a))
+            else:
+                factor = (dist - 15) / 75.0
+                out.putpixel((x, y), (0, 0, 0, int(a * factor)))
     return out
 
 def process_silhouette(im):
@@ -50,7 +55,7 @@ def process_silhouette(im):
                         visited[nx][ny] = True
                         queue.append((nx, ny))
                         
-    # 2. Output image
+    # 2. Output image with smooth edges
     out = Image.new('RGBA', (width, height))
     for y in range(height):
         for x in range(width):
@@ -58,12 +63,18 @@ def process_silhouette(im):
                 out.putpixel((x, y), (0, 0, 0, 0))
             else:
                 r, g, b, a = im.getpixel((x, y))
-                if r > 240 and g > 240 and b > 240:
+                # Distance to white
+                dist = (255-r) + (255-g) + (255-b)
+                if dist < 15: 
                     # Inner white antenna -> Black
                     out.putpixel((x, y), (0, 0, 0, a))
                 else:
-                    # Purple circle -> Transparent
-                    out.putpixel((x, y), (0, 0, 0, 0))
+                    # Purple circle -> Smoothly transparent
+                    if dist > 90:
+                        out.putpixel((x, y), (0, 0, 0, 0))
+                    else:
+                        factor = 1.0 - (dist / 90.0)
+                        out.putpixel((x, y), (0, 0, 0, int(a * factor)))
     return out
 
 def main():
@@ -78,8 +89,6 @@ def main():
     
     im = Image.open(input_path)
     
-    # Process at high resolution first to preserve detail, then downscale
-    # The logo is 1024x1024.
     if mode == 'badge':
         processed = process_badge(im)
     else:

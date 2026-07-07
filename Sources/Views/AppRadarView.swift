@@ -112,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             var icon: NSImage? = nil
             if let path = Bundle.main.path(forResource: "logo_menu", ofType: "png") {
                 icon = NSImage(contentsOfFile: path)
+                icon?.size = NSSize(width: 18, height: 18) // 关键：指定逻辑尺寸为 18x18 磅，让 36x36 物理像素在高分屏 (Retina) 下完美渲染为超清晰的 2x Retina 资源
             }
             if icon == nil {
                 icon = NSImage(systemSymbolName: "antenna.radiowaves.left.and.right", accessibilityDescription: "AppRadar Live")
