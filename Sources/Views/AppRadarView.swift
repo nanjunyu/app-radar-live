@@ -4,15 +4,14 @@ import AppKit
 // MARK: - Main View
 struct AppRadarView: View {
     @ObservedObject var scanner: RadarScanner
-    @State private var selectedSidebarItem: SidebarItem? = .monitorAll
     @AppStorage("themeColorHex") private var themeColorHex: String = "#8B5CF6"
     var currentAccent: Color { Color(hex: themeColorHex) }
     
     // 自绘侧边栏行：用 Button（命中可靠、即点即应）+ 主题色圆角背景作为选中高亮
     @ViewBuilder
     private func sidebarRow(_ item: SidebarItem, _ title: String, _ icon: String, badge: Int = 0) -> some View {
-        let selected = selectedSidebarItem == item
-        Button(action: { selectedSidebarItem = item }) {
+        let selected = scanner.selectedSidebarItem == item
+        Button(action: { scanner.selectedSidebarItem = item }) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
                     .foregroundColor(selected ? .white : currentAccent)
@@ -64,11 +63,11 @@ struct AppRadarView: View {
                 // 主题色调底：单色平铺（比全屏渐变轻很多，避免高频刷新时掉帧）
                 Color(NSColor.windowBackgroundColor).ignoresSafeArea()
                 currentAccent.opacity(0.05).ignoresSafeArea()
-                if selectedSidebarItem == .monitorAll {
+                if scanner.selectedSidebarItem == .monitorAll {
                     ActivityMonitorView(scanner: scanner, live: scanner.live, accentColor: currentAccent)
-                } else if selectedSidebarItem == .updateAll {
+                } else if scanner.selectedSidebarItem == .updateAll {
                     UpdateCenterView(scanner: scanner, accentColor: currentAccent)
-                } else if selectedSidebarItem == .sysSettings {
+                } else if scanner.selectedSidebarItem == .sysSettings {
                     SettingsView(themeColorHex: $themeColorHex, accentColor: currentAccent)
                 } else {
                     Text("请选择左侧菜单")
@@ -110,7 +109,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 2) 菜单栏常驻图标
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            let icon = NSImage(systemSymbolName: "antenna.radiowaves.left.and.right", accessibilityDescription: "AppRadar Live")
+            var icon: NSImage? = nil
+            if let path = Bundle.main.path(forResource: "logo_menu", ofType: "png") {
+                icon = NSImage(contentsOfFile: path)
+            }
+            if icon == nil {
+                icon = NSImage(systemSymbolName: "antenna.radiowaves.left.and.right", accessibilityDescription: "AppRadar Live")
+            }
             icon?.isTemplate = true   // 跟随菜单栏明暗自适应
             button.image = icon
             button.action = #selector(togglePopover(_:))
@@ -151,45 +156,249 @@ struct MenuBarContentView: View {
     @ObservedObject var live: LiveMetrics
     var accentColor: Color
     
-    private func statRow(_ title: String, _ value: String, color: Color = .primary) -> some View {
-        HStack {
-            Text(title).font(.system(size: 12)).foregroundColor(.secondary)
-            Spacer()
-            Text(value).font(.system(size: 12, weight: .medium)).foregroundColor(color)
+    private func openMainApp(select tab: SidebarItem) {
+        // 关闭 popover 弹窗本身 (可从 window list 找到 popover 进行 close，或者直接让其失去焦点自闭)
+        // 并选择标签页、激活主应用
+        scanner.selectedSidebarItem = tab
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        for window in NSApplication.shared.windows {
+            if window.canBecomeMain && window.level == .normal {
+                window.makeKeyAndOrderFront(nil)
+            }
         }
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: "antenna.radiowaves.left.and.right").foregroundColor(accentColor)
-                Text("AppRadar Live").font(.system(size: 14, weight: .bold))
-                Spacer()
-            }
-            Divider()
-            statRow("CPU 占用", String(format: "%.1f%%", min(100, live.cpuUser + live.cpuSys)), color: accentColor)
-            statRow("已用内存", scanner.formatMemoryGB(live.appMem + live.wiredMem + live.compressedMem))
-            statRow("进程数", "\(live.processes.count)")
-            statRow("待更新", scanner.updates.count > 0 ? "\(scanner.updates.count) 项" : "已最新",
-                    color: scanner.updates.count > 0 ? .orange : .green)
-            Divider()
-            Button {
-                NSApplication.shared.activate(ignoringOtherApps: true)
-                for window in NSApplication.shared.windows where window.canBecomeMain {
-                    window.makeKeyAndOrderFront(nil)
+        VStack(alignment: .leading, spacing: 12) {
+            // 头部栏：真实 App 标识
+            HStack(spacing: 8) {
+                if let path = Bundle.main.path(forResource: "logo", ofType: "png"),
+                   let nsImg = NSImage(contentsOfFile: path) {
+                    Image(nsImage: nsImg)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 24, height: 24)
+                        .cornerRadius(6)
+                        .shadow(color: Color.black.opacity(0.12), radius: 2, x: 0, y: 1)
+                } else {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(accentColor)
                 }
-            } label: {
-                Label("打开主面板", systemImage: "macwindow").frame(maxWidth: .infinity, alignment: .leading)
+                
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("AppRadar Live")
+                        .font(.system(size: 13, weight: .bold))
+                    Text("系统资源与软件更新")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                // 快捷齿轮跳转设置
+                Button(action: {
+                    openMainApp(select: .sysSettings)
+                }) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .padding(5)
+                        .background(Color.gray.opacity(0.1))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            Button {
-                NSApplication.shared.terminate(nil)
-            } label: {
-                Label("退出 AppRadar", systemImage: "power").frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, 2)
+            
+            Divider()
+            
+            // 卡片 1：系统状态监控（点击进入进程列表）
+            Button(action: {
+                openMainApp(select: .monitorAll)
+            }) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label("系统状态", systemImage: "cpu")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(.gray.opacity(0.5))
+                    }
+                    
+                    HStack(spacing: 0) {
+                        // CPU
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("CPU 占用").font(.system(size: 9)).foregroundColor(.secondary)
+                            Text(String(format: "%.1f%%", min(100, live.cpuUser + live.cpuSys)))
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundColor(accentColor)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        
+                        Divider().frame(height: 22).padding(.horizontal, 4)
+                        
+                        // 内存
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("已用内存").font(.system(size: 9)).foregroundColor(.secondary)
+                            Text(scanner.formatMemoryGB(live.appMem + live.wiredMem + live.compressedMem))
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundColor(.primary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        
+                        Divider().frame(height: 22).padding(.horizontal, 4)
+                        
+                        // 进程
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("总进程数").font(.system(size: 9)).foregroundColor(.secondary)
+                            Text("\(live.processes.count)")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundColor(.primary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(10)
+                .background(Color(NSColor.controlBackgroundColor).opacity(0.6))
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.gray.opacity(0.12), lineWidth: 1)
+                )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(HoverCardButtonStyle())
+            
+            // 卡片 2：待更新软件中心（点击进入更新中心）
+            let pendingUpdates = scanner.updates.filter { !$0.upgraded && !$0.ignored }
+            Button(action: {
+                openMainApp(select: .updateAll)
+            }) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label("更新中心", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(.gray.opacity(0.5))
+                    }
+                    
+                    HStack(spacing: 8) {
+                        if pendingUpdates.count > 0 {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .foregroundColor(.orange)
+                                .font(.system(size: 16))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(pendingUpdates.count) 个软件可更新")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundColor(.orange)
+                                
+                                let names = pendingUpdates.prefix(2).map { $0.displayName ?? $0.name }.joined(separator: ", ")
+                                let suffix = pendingUpdates.count > 2 ? " 等" : ""
+                                Text("\(names)\(suffix)")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                        } else {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.system(size: 16))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("所有软件已是最新")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundColor(.green)
+                                Text("AppRadar 后台持续监视中")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(NSColor.controlBackgroundColor).opacity(0.6))
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.gray.opacity(0.12), lineWidth: 1)
+                )
+            }
+            .buttonStyle(HoverCardButtonStyle())
+            
+            Divider()
+            
+            // 底部操作区
+            HStack(spacing: 8) {
+                Button(action: {
+                    openMainApp(select: .monitorAll)
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "macwindow")
+                            .font(.system(size: 10))
+                        Text("打开主面板")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(6)
+                }
+                .buttonStyle(PlainHoverButtonStyle())
+                
+                Button(action: {
+                    NSApplication.shared.terminate(nil)
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "power")
+                            .font(.system(size: 10))
+                        Text("退出 AppRadar")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(Color.red.opacity(0.08))
+                    .foregroundColor(.red)
+                    .cornerRadius(6)
+                }
+                .buttonStyle(PlainHoverButtonStyle())
+            }
         }
-        .padding(14)
-        .frame(width: 240)
+        .padding(12)
+        .frame(width: 250)
+    }
+}
+
+// MARK: - 自定义按钮动效样式
+struct HoverCardButtonStyle: ButtonStyle {
+    @State private var isHovered = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .background(isHovered ? Color.gray.opacity(0.08) : Color.clear)
+            .cornerRadius(8)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+            .onHover { hover in
+                isHovered = hover
+            }
+    }
+}
+
+struct PlainHoverButtonStyle: ButtonStyle {
+    @State private var isHovered = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .opacity(isHovered ? 0.8 : 1.0)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+            .onHover { hover in
+                isHovered = hover
+            }
     }
 }
