@@ -68,7 +68,6 @@ struct UpdateCenterView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 10) {
                             categoryTabButton("全部", tag: "all")
-                            categoryTabButton("App Store", tag: "appStore")
                             categoryTabButton("Homebrew", tag: "brew")
                             if scanner.hasNpm {
                                 categoryTabButton("Node.js", tag: "node")
