@@ -7,6 +7,7 @@ import Foundation
 final class LiveMetrics: ObservableObject {
     @Published var processes: [SysProcess] = []
     @Published var isScanningProcesses = false
+    @Published var isDockerFirstLoad = true   // Docker 数据尚未首次加载完成，UI 应展示加载态而非空态
     
     @Published var cpuUser: Double = 0
     @Published var cpuSys: Double = 0

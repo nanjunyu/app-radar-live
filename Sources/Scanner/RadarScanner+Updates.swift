@@ -7,6 +7,12 @@ extension RadarScanner {
         if isScanningUpdates { return }
         isScanningUpdates = true
         
+        // 在新一轮扫描开始前，清除之前已成功升级的项目（使其能自动归入已安装列表，并同步刷新角标）
+        DispatchQueue.main.async {
+            self.updates.removeAll(where: { $0.upgraded })
+            self.refreshDockBadge()
+        }
+        
         // 用 userInitiated 优先级，避免在繁忙系统上被后台 QoS 限流导致"一直在检查更新"
         DispatchQueue.global(qos: .userInitiated).async {
             // 三个渠道互相独立，并发扫描；整体耗时取决于最慢的一个，而非三者之和
@@ -31,7 +37,43 @@ extension RadarScanner {
                 // 保留 Git / 其他 渠道结果（它们由各自独立异步扫描填充，避免被覆盖）
                 let keepUpdates = self.updates.filter { $0.category == .git || $0.category == .other }
                 let keepInstalled = self.installed.filter { $0.category == .git || $0.category == .other }
-                self.updates = scannedUpdates + keepUpdates
+                
+                // === 关键：合并新扫描结果时保留已有的升级状态 ===
+                // mas outdated / brew outdated 在刚执行完升级后可能还未刷新，
+                // 导致刚升完的应用仍出现在扫描结果中。如果直接替换，旧对象上的
+                // upgraded / upgrading 状态就丢失了，用户看到的是"又变回待更新"。
+                // 策略：如果旧列表中已有同一应用且处于 upgraded 或 upgrading 状态，
+                // 则保留旧对象（带完整状态），跳过新扫描出的对象。
+                let oldByKey: [String: RadarUpdateApp] = {
+                    var map: [String: RadarUpdateApp] = [:]
+                    for app in self.updates {
+                        map[self.stableKey(for: app)] = app
+                    }
+                    return map
+                }()
+                var mergedUpdates: [RadarUpdateApp] = []
+                for newApp in scannedUpdates {
+                    let key = self.stableKey(for: newApp)
+                    if let old = oldByKey[key] {
+                        // 关键优化：如果旧列表中已有该应用，保留旧对象（保留已加载的描述、图片等富媒体元数据和升级状态），
+                        // 仅增量更新版本等必要属性，防止因周扫重建对象导致详情页图片/说明瞬间被重置为空白。
+                        old.latestVersion = newApp.latestVersion
+                        old.currentVersion = newApp.currentVersion
+                        mergedUpdates.append(old)
+                    } else {
+                        mergedUpdates.append(newApp)
+                    }
+                }
+                
+                // 保留那些已经完成升级的旧更新项，使其在 UI 上保持“已完成”状态（不立刻从待更新列表中消失）
+                for old in self.updates where old.upgraded {
+                    let key = self.stableKey(for: old)
+                    if !mergedUpdates.contains(where: { self.stableKey(for: $0) == key }) {
+                        mergedUpdates.append(old)
+                    }
+                }
+                
+                self.updates = mergedUpdates + keepUpdates
                 self.installed = scannedInstalled + keepInstalled
                 self.isScanningUpdates = false
                 self.restoreIgnoreState()
@@ -101,12 +143,25 @@ extension RadarScanner {
             self.fetchAppStoreMetadata(for: app)
             installed.append(app)
         }
+        
         return (updates, installed)
     }
     
     // === Homebrew 渠道：brew outdated --json（待更新） + brew list（已安装） ===
     private func scanBrewChannel() -> (updates: [RadarUpdateApp], installed: [RadarUpdateApp]) {
         var updates: [RadarUpdateApp] = []
+        
+        // 1. 获取所有 Homebrew 服务状态
+        let servicesList = ProcessRunner.runCommand("brew services list 2>/dev/null")
+        var runningServices: [String: String] = [:]
+        for line in servicesList.components(separatedBy: .newlines) {
+            if line.hasPrefix("Name") || line.isEmpty { continue }
+            let parts = line.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+            if parts.count >= 2 {
+                runningServices[parts[0]] = parts[1]
+            }
+        }
+        
         let brewOutdated = ProcessRunner.runCommand("brew outdated --json 2>/dev/null")
         if let data = brewOutdated.data(using: .utf8),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -116,6 +171,13 @@ extension RadarScanner {
                     let app = RadarUpdateApp(name: name, category: .brew)
                     app.currentVersion = (item["installed_versions"] as? [String])?.last
                     app.latestVersion = item["current_version"] as? String
+                    
+                    // 标记服务状态
+                    if let status = runningServices[name] {
+                        app.isBrewService = true
+                        app.isRunning = (status == "started")
+                    }
+                    
                     updates.append(app)
                 }
             }
@@ -126,19 +188,30 @@ extension RadarScanner {
                     app.isCask = true
                     app.currentVersion = (item["installed_versions"] as? [String])?.last ?? item["installed_version"] as? String
                     app.latestVersion = item["current_version"] as? String
+                    
+                    // 获取 Cask 本地图标
+                    Self.loadCaskLocalIcon(app: app)
+                    
                     updates.append(app)
                 }
             }
         }
         let updateNames = Set(updates.map { $0.name })
         var installed: [RadarUpdateApp] = []
-        // formula（CLI 工具，无 GUI）
-        let formulaList = ProcessRunner.runCommand("brew list --formula -1 2>/dev/null")
+        // formula（仅显示用户主动安装的顶层包，过滤掉自动依赖）
+        let formulaList = ProcessRunner.runCommand("brew leaves 2>/dev/null")
         for line in formulaList.components(separatedBy: .newlines) {
             let name = line.trimmingCharacters(in: .whitespaces)
             if name.isEmpty || updateNames.contains(name) { continue }
             let app = RadarUpdateApp(name: name, category: .brew)
             app.upgraded = true
+            
+            // 标记服务状态
+            if let status = runningServices[name] {
+                app.isBrewService = true
+                app.isRunning = (status == "started")
+            }
+            
             installed.append(app)
         }
         // cask（GUI 应用，可"打开"）
@@ -149,6 +222,10 @@ extension RadarScanner {
             let app = RadarUpdateApp(name: name, category: .brew)
             app.isCask = true
             app.upgraded = true
+            
+            // 获取 Cask 本地图标
+            Self.loadCaskLocalIcon(app: app)
+            
             installed.append(app)
         }
         return (updates, installed)
@@ -280,6 +357,37 @@ extension RadarScanner {
         if let size = first["fileSizeBytes"] as? String, let s = Int64(size) {
             let formatter = ByteCountFormatter()
             app.sizeStr = formatter.string(fromByteCount: s)
+        }
+    }
+    
+    // 跨扫描周期稳定匹配同一应用的标识键：
+    // App Store 用 appId（数字 ID，如 "497799835"），其余渠道用 category + name
+    func stableKey(for app: RadarUpdateApp) -> String {
+        if app.category == .appStore, let id = app.appId, !id.isEmpty {
+            return "appStore|\(id)"
+        }
+        return "\(app.category.rawValue)|\(app.name)"
+    }
+    
+    // 异步或同步地读取本地 Cask 安装生成的 .app 包图标，从而支持在详情页及列表卡片完美渲染 App Icon
+    static func loadCaskLocalIcon(app: RadarUpdateApp) {
+        let caskroomDirs = ["/opt/homebrew/Caskroom", "/usr/local/Caskroom"]
+        for base in caskroomDirs {
+            let dir = "\(base)/\(app.name)"
+            if FileManager.default.fileExists(atPath: dir) {
+                let enumerator = FileManager.default.enumerator(atPath: dir)
+                while let file = enumerator?.nextObject() as? String {
+                    if file.hasSuffix(".app") {
+                        let appPath = "\(dir)/\(file)"
+                        var isDir: ObjCBool = false
+                        if FileManager.default.fileExists(atPath: appPath, isDirectory: &isDir), isDir.boolValue {
+                            app.localIcon = NSWorkspace.shared.icon(forFile: appPath)
+                            app.localPath = appPath
+                            return
+                        }
+                    }
+                }
+            }
         }
     }
 }

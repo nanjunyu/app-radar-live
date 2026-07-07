@@ -50,7 +50,7 @@ extension RadarScanner {
             let latest = (json["dist-tags"] as? [String: Any])?["latest"] as? String ?? app.latestVersion
             DispatchQueue.main.async {
                 if let desc = json["description"] as? String, !desc.isEmpty {
-                    Translator.toZh(desc) { zh in DispatchQueue.main.async { app.descriptionText = zh } }
+                    app.descriptionText = desc
                 }
                 if let lic = json["license"] as? String, !lic.isEmpty { app.license = lic }
                 if let hp = json["homepage"] as? String, let u = URL(string: hp) { app.homepage = u }
@@ -68,16 +68,25 @@ extension RadarScanner {
                 // README 作为「说明」内容（无 changelog 时的可靠富文本来源）
                 if let readme = json["readme"] as? String, !readme.isEmpty {
                     let excerpt = Self.readmeExcerpt(readme)
-                    Translator.toZh(excerpt) { zh in DispatchQueue.main.async { app.releaseNotes = zh } }
+                    app.releaseNotes = excerpt
+                    
+                    // 异步提取 README 中的截图预览图
+                    var rawBaseUrl = ""
+                    if let owner = Self.githubOwner(from: json["repository"]) ?? Self.inferOwner(pkg: app.name, json: json) {
+                        let repoName = app.name.split(separator: "/").last.map(String.init) ?? app.name
+                        rawBaseUrl = "https://raw.githubusercontent.com/\(owner)/\(repoName)/HEAD"
+                    }
+                    let imgs = RadarScanner.extractReadmeImages(readme, repoPath: rawBaseUrl, fileSubdir: "")
+                    app.screenshotUrls = imgs
                 } else if let desc = json["description"] as? String, !desc.isEmpty {
                     // npm registry readme 为空时，尝试从 GitHub 拉取 README
                     if let owner = Self.githubOwner(from: json["repository"]) ?? Self.inferOwner(pkg: app.name, json: json) {
                         Self.fetchGitHubReadme(owner: owner, pkg: app.name) { excerpt in
                             let text = excerpt ?? desc
-                            Translator.toZh(text) { zh in DispatchQueue.main.async { app.releaseNotes = zh } }
+                            DispatchQueue.main.async { app.releaseNotes = text }
                         }
                     } else {
-                        Translator.toZh(desc) { zh in DispatchQueue.main.async { app.releaseNotes = zh } }
+                        app.releaseNotes = desc
                     }
                 }
             }
@@ -160,9 +169,7 @@ extension RadarScanner {
                       let body = rel["body"] as? String, !body.isEmpty else { return }
                 // 清理 markdown：去掉过长的 PR 链接、保留核心内容
                 let cleaned = Self.cleanReleaseBody(body)
-                Translator.toZh(cleaned) { zh in
-                    DispatchQueue.main.async { app.changelogNotes = zh }
-                }
+                DispatchQueue.main.async { app.changelogNotes = cleaned }
             }.resume()
         }.resume()
     }

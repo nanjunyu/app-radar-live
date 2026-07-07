@@ -47,22 +47,8 @@ struct AppRadarView: View {
                     sidebarRow(.monitorAll, "所有进程", "waveform.path.ecg")
                 }
                 Section(header: Text("版本更新中心").font(.caption).foregroundColor(.gray)) {
-                    sidebarRow(.updateAppStore, "App Store 更新", "arrow.down.app",
-                               badge: scanner.updates.filter { $0.category == .appStore && !$0.upgraded && !$0.ignored }.count)
-                    sidebarRow(.updateBrew, "Homebrew", "mug",
-                               badge: scanner.updates.filter { $0.category == .brew && !$0.upgraded && !$0.ignored }.count)
-                    if scanner.hasNpm {
-                        sidebarRow(.updateNode, "Node 全局包", "shippingbox",
-                                   badge: scanner.updates.filter { $0.category == .node && !$0.upgraded && !$0.ignored }.count)
-                    }
-                    if scanner.hasGit {
-                        sidebarRow(.updateGit, "Git 项目", "arrow.triangle.branch",
-                                   badge: scanner.updates.filter { $0.category == .git && !$0.upgraded && !$0.ignored }.count)
-                    }
-                    if scanner.hasOther {
-                        sidebarRow(.updateOther, "其他", "square.grid.2x2",
-                                   badge: scanner.updates.filter { $0.category == .other && !$0.upgraded && !$0.ignored }.count)
-                    }
+                    sidebarRow(.updateAll, "应用与更新", "square.grid.3x3.fill",
+                               badge: scanner.updates.filter { !$0.upgraded && !$0.ignored }.count)
                 }
                 Section(header: Text("系统").font(.caption).foregroundColor(.gray)) {
                     sidebarRow(.sysSettings, "设置", "gearshape")
@@ -80,16 +66,8 @@ struct AppRadarView: View {
                 currentAccent.opacity(0.05).ignoresSafeArea()
                 if selectedSidebarItem == .monitorAll {
                     ActivityMonitorView(scanner: scanner, live: scanner.live, accentColor: currentAccent)
-                } else if selectedSidebarItem == .updateAppStore {
-                    UpdateCenterView(scanner: scanner, accentColor: currentAccent, category: .appStore)
-                } else if selectedSidebarItem == .updateBrew {
-                    UpdateCenterView(scanner: scanner, accentColor: currentAccent, category: .brew)
-                } else if selectedSidebarItem == .updateNode {
-                    UpdateCenterView(scanner: scanner, accentColor: currentAccent, category: .node)
-                } else if selectedSidebarItem == .updateGit {
-                    UpdateCenterView(scanner: scanner, accentColor: currentAccent, category: .git)
-                } else if selectedSidebarItem == .updateOther {
-                    UpdateCenterView(scanner: scanner, accentColor: currentAccent, category: .other)
+                } else if selectedSidebarItem == .updateAll {
+                    UpdateCenterView(scanner: scanner, accentColor: currentAccent)
                 } else if selectedSidebarItem == .sysSettings {
                     SettingsView(themeColorHex: $themeColorHex, accentColor: currentAccent)
                 } else {

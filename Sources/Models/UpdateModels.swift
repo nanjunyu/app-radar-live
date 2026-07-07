@@ -9,6 +9,20 @@ enum UpdateCategory: String {
     case node = "Node 全局包 (待更新)"
     case git = "Git 项目 (待更新)"
     case other = "其他 (待更新)"
+    
+    var color: Color {
+        switch self {
+        case .appStore: return .pink
+        case .brew: return .orange
+        case .node: return .green
+        case .git: return .purple
+        case .other: return .blue
+        }
+    }
+    
+    var cleanName: String {
+        self.rawValue.replacingOccurrences(of: " (待更新)", with: "")
+    }
 }
 
 // 「其他」渠道下的子类型：用于列表/详情的来源小标签
@@ -50,8 +64,9 @@ class RadarUpdateApp: Identifiable, ObservableObject, Hashable {
     @Published var isUpgrading: Bool = false
     @Published var upgradeMessage: String?
     @Published var upgraded: Bool = false   // 升级成功后置真，按钮变为"已是最新版"
-    // Git 项目专用：本地仓库路径
+    // Git 项目专用：本地仓库路径 / 远程 Git 仓库 URL
     @Published var localPath: String?
+    @Published var gitRepoUrl: String?
     @Published var language: String?       // 主语言（从本地文件统计）
     @Published var lastUpdated: String?    // 最后更新时间（相对时间，如"3天前"）
     @Published var stars: Int?             // GitHub star 数（API 可用时填充）
@@ -61,15 +76,90 @@ class RadarUpdateApp: Identifiable, ObservableObject, Hashable {
     // 「其他」渠道专用
     @Published var sourceKind: SourceKind?     // 子类型（独立应用 / 命令行工具）
     var upgradeCommand: String?                // CLI 工具的升级命令（如 "claude update"）
-    // Node 服务管理
+    // Node 服务管理 / Homebrew 服务管理
     @Published var isRunning: Bool = false     // 当前是否有对应进程在跑
     @Published var servicePort: Int?           // 监听的端口（用于"打开"按钮）
     @Published var isStartingOrStopping = false // 正在启动/停止中
+    @Published var isBrewService = false        // 是否是 Homebrew 后台服务（支持启停）
     var serviceBins: [String] = []            // 该包的真实可执行命令名（读自 package.json bin）
     var runningPids: [Int] = []               // 检测到的运行中进程 pid（用于停止）
     var isCask = false                        // Homebrew cask（GUI 应用，可"打开"）；formula 为 CLI 无 GUI
     
-    init(name: String, category: UpdateCategory) { self.name = name; self.category = category }
+    init(name: String, category: UpdateCategory) {
+        self.name = name
+        self.category = category
+        
+        // 自动探测并填充流行开发者工具/CLI/服务软件的 Logo URL
+        if category == .brew || category == .node || category == .other {
+            let low = name.lowercased()
+            let orgs: [String: String] = [
+                "gh": "github",
+                "go": "golang",
+                "golang": "golang",
+                "node": "nodejs",
+                "npm": "npm",
+                "redis": "redis",
+                "mysql": "mysql",
+                "postgres": "postgres",
+                "postgresql": "postgres",
+                "mongodb": "mongodb",
+                "python": "python",
+                "git": "git",
+                "docker": "docker",
+                "rust": "rust-lang",
+                "rustup": "rust-lang",
+                "cargo": "rust-lang",
+                "nginx": "nginx",
+                "deno": "denoland",
+                "bun": "oven-sh",
+                "yarn": "yarnpkg",
+                "pnpm": "pnpm",
+                "himalaya": "soywod",
+                "mas": "mas-cli",
+                "nmap": "nmap",
+                "pandoc": "jgm",
+                "qrencode": "fukuchi",
+                "whisper-cpp": "ggerganov",
+                "xurl": "xdevplatform",
+                "curl": "curl",
+                "wget": "gnu",
+                "jq": "jqlang",
+                "sqlite": "sqlite",
+                "ffmpeg": "FFmpeg",
+                "kubernetes-cli": "kubernetes",
+                "kubectl": "kubernetes",
+                "awscli": "aws",
+                "ghc": "haskell",
+                "ruby": "ruby",
+                "cmake": "Kitware",
+                "tmux": "tmux",
+                "neovim": "neovim",
+                "nvim": "neovim",
+                "vim": "vim",
+                "emacs": "emacs-mirror",
+                "ansible": "ansible",
+                "terraform": "hashicorp",
+                "cliproxyapi": "siteboon",
+                "claude": "anthropic",
+                "copilot": "github"
+            ]
+            
+            var matchedOrg: String? = orgs[low]
+            if matchedOrg == nil {
+                // 前缀匹配 (如 node@22 -> node, python@3.13 -> python)
+                for (key, org) in orgs {
+                    if low.hasPrefix(key + "@") || low.hasPrefix(key + "-") {
+                        matchedOrg = org
+                        break
+                    }
+                }
+            }
+            
+            if let org = matchedOrg {
+                self.logoUrl = URL(string: "https://github.com/\(org).png?size=128")
+            }
+        }
+    }
     var bestName: String { displayName ?? name }
     // 语言显示：去重，优先中文，效仿官方 "ZH +N种语言"
     var languageDisplay: (primary: String, extraCount: Int)? {

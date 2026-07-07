@@ -16,7 +16,17 @@ extension RadarScanner {
             let installed = apps.filter { $0.upgraded }
             DispatchQueue.main.async {
                 self.hasOther = !apps.isEmpty
-                self.updates = self.updates.filter { $0.category != .other } + updates
+                
+                // 保留那些已经在本会话完成升级的旧「其他」项，以便在 UI 上展示“已完成”而不直接消失
+                let oldOtherUpgraded = self.updates.filter { $0.category == .other && $0.upgraded }
+                var mergedOtherUpdates = updates
+                for old in oldOtherUpgraded {
+                    if !mergedOtherUpdates.contains(where: { $0.name == old.name }) {
+                        mergedOtherUpdates.append(old)
+                    }
+                }
+                
+                self.updates = self.updates.filter { $0.category != .other } + mergedOtherUpdates
                 self.installed = self.installed.filter { $0.category != .other } + installed
                 self.isScanningOther = false
                 self.restoreIgnoreState()

@@ -6,7 +6,12 @@ extension RadarScanner {
     // 扫描本机 GitHub 仓库：发现 → 仅保留 origin 为 github.com → fetch 对比是否落后。
     // 落后的进「待更新」，其余进「已安装」。仅在启动/手动刷新时执行（涉及网络，较慢）。
     func scanGitProjects() {
-        DispatchQueue.main.async { self.isScanningGit = true }
+        DispatchQueue.main.async {
+            self.isScanningGit = true
+            // 开始扫描前，清除已成功升级的旧 Git 项目（使其移入已安装，并扣减角标）
+            self.updates.removeAll(where: { $0.category == .git && $0.upgraded })
+            self.refreshDockBadge()
+        }
         DispatchQueue.global(qos: .utility).async {
             let repos = self.discoverGitHubRepos()
             guard !repos.isEmpty else {
@@ -47,7 +52,16 @@ extension RadarScanner {
             let installed = apps.filter { $0.upgraded }
             
             DispatchQueue.main.async {
-                self.updates = self.updates.filter { $0.category != .git } + updates
+                // 保留那些已经在本会话完成升级的旧 Git 仓库，以便在 UI 上展示“已完成”而不直接消失
+                let oldGitUpgraded = self.updates.filter { $0.category == .git && $0.upgraded }
+                var mergedGitUpdates = updates
+                for old in oldGitUpgraded {
+                    if !mergedGitUpdates.contains(where: { $0.name == old.name }) {
+                        mergedGitUpdates.append(old)
+                    }
+                }
+                
+                self.updates = self.updates.filter { $0.category != .git } + mergedGitUpdates
                 self.installed = self.installed.filter { $0.category != .git } + installed
                 self.isScanningGit = false
                 self.restoreIgnoreState()
@@ -105,12 +119,15 @@ extension RadarScanner {
         // 运行中进程反查的活跃项目目录（lsof CWD 向上找 .git），补全不在常见目录下的仓库
         for path in self.runningProjectRoots() { roots.insert(path) }
         
-        // 先按规范化真实路径去重（消除符号链接 / /private 前缀 / 末尾斜杠等导致的重复）
+        // 先按规范化真实路径去重（消除符号链接 / /private 前缀 / 末尾斜杠等以及大小写重复）
         var seen = Set<String>()
         var uniqueRepos: [String] = []
         for repo in roots.sorted() {
             let canonical = URL(fileURLWithPath: repo).resolvingSymlinksInPath().path
-            if seen.insert(canonical).inserted { uniqueRepos.append(canonical) }
+            let lowercased = canonical.lowercased()
+            if seen.insert(lowercased).inserted {
+                uniqueRepos.append(canonical)
+            }
         }
         // 再并行检查每个仓库的 origin 是否指向 github（git remote 为本地操作，并行后几乎瞬时）
         var isGithub = [Bool](repeating: false, count: uniqueRepos.count)
@@ -193,13 +210,13 @@ extension RadarScanner {
         DispatchQueue.main.async { app.isUpgrading = true; app.upgradeMessage = "拉取中…" }
         DispatchQueue.global(qos: .userInitiated).async {
             let q = self.shellQuote(path)
-            var lastLine = ""
+            var fullOutput = ""
             let code = ProcessRunner.runCommandStreaming("git -C \(q) pull --ff-only 2>&1") { line in
-                lastLine = line
+                fullOutput += line + "\n"
                 DispatchQueue.main.async { app.upgradeMessage = String(line.prefix(40)) }
             }
-            let lower = lastLine.lowercased()
-            // ff-only 失败（本地有分叉/改动）→ 给出清晰中文提示，不强制
+            let lower = fullOutput.lowercased()
+            // ff-only 失败（本地有分叉/改动）→ 给出清晰且易懂的中文解释
             let diverged = lower.contains("not possible to fast-forward") || lower.contains("diverg")
             let localChanges = lower.contains("would be overwritten") || lower.contains("local changes") || lower.contains("unstaged")
             let conflict = lower.contains("conflict")
@@ -210,14 +227,56 @@ extension RadarScanner {
                     app.upgradeMessage = "✅ 已更新到最新"
                     app.upgraded = true
                     self.refreshDockBadge()
-                } else if diverged {
-                    app.upgradeMessage = "⚠️ 本地与远程已分叉，需手动合并"
-                } else if localChanges {
-                    app.upgradeMessage = "⚠️ 本地有未提交改动，请先提交或暂存"
-                } else if conflict {
-                    app.upgradeMessage = "⚠️ 存在冲突，需手动解决"
                 } else {
-                    app.upgradeMessage = "⚠️ 更新失败，需手动处理"
+                    if localChanges {
+                        app.upgradeMessage = "⚠️ 本地文件已被修改，为防止您的改动丢失，更新已终止。若不需要修改，可点详情页使用「强制更新」"
+                    } else if diverged {
+                        app.upgradeMessage = "⚠️ 本地有新提交与远程产生了分叉。可使用「强制更新」覆盖本地，或手动处理"
+                    } else if conflict {
+                        app.upgradeMessage = "⚠️ 本地修改与远程更新冲突。可使用「强制更新」覆盖本地，或手动解决冲突"
+                    } else if lower.contains("could not read from remote") || lower.contains("timed out") || lower.contains("resolve host") {
+                        app.upgradeMessage = "⚠️ 无法连接远程仓库，请检查网络连接或 GitHub 权限"
+                    } else {
+                        app.upgradeMessage = "⚠️ 更新失败，建议您进入详情页使用「强制更新」"
+                    }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self.scanGitProjects() }
+        }
+    }
+    
+    // 强制更新：不顾本地修改和分叉，强制重置到远端最新状态 (@{u}) 并清理未追踪文件
+    func forceUpgradeGitRepo(_ app: RadarUpdateApp) {
+        guard let path = app.localPath, !app.isUpgrading else { return }
+        DispatchQueue.main.async {
+            app.isUpgrading = true
+            app.upgradeMessage = "正在强制更新 (fetch)..."
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let q = self.shellQuote(path)
+            
+            // 1. git fetch --all
+            _ = ProcessRunner.runCommand("git -C \(q) fetch --all 2>&1")
+            
+            // 2. git reset --hard @{u}
+            DispatchQueue.main.async { app.upgradeMessage = "重置本地代码 (reset)..." }
+            let resetResult = ProcessRunner.runCommand("git -C \(q) reset --hard @{u} 2>&1")
+            
+            // 3. git clean -fd (清理未跟踪的文件和目录)
+            DispatchQueue.main.async { app.upgradeMessage = "清理未跟踪文件 (clean)..." }
+            _ = ProcessRunner.runCommand("git -C \(q) clean -fd 2>&1")
+            
+            let lower = resetResult.lowercased()
+            let failed = lower.contains("error") || lower.contains("fatal")
+            
+            DispatchQueue.main.async {
+                app.isUpgrading = false
+                if !failed {
+                    app.upgradeMessage = "✅ 强制更新成功"
+                    app.upgraded = true
+                    self.refreshDockBadge()
+                } else {
+                    app.upgradeMessage = "⚠️ 强制更新失败，请手动处理"
                 }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.scanGitProjects() }
@@ -315,8 +374,15 @@ extension RadarScanner {
     
     // 读取本地 README 并提取正文摘要 + 图片（同步，调用方负责放到后台线程）
     static func loadLocalReadme(path: String) -> (excerpt: String, images: [String])? {
-        let candidates = ["README.md", "readme.md", "README", "Readme.md",
-                          "README.markdown", "README.rst", "docs/README.md"]
+        let isChinese = Locale.preferredLanguages.first?.hasPrefix("zh") == true
+        let zhCandidates = [
+            "README.zh-CN.md", "README.zh_CN.md", "README.zh.md", "README.zh-Hans.md",
+            "README_zh.md", "readme.zh-cn.md", "readme.zh.md", "README_CN.md", "readme_cn.md"
+        ]
+        let standardCandidates = ["README.md", "readme.md", "README", "Readme.md",
+                                  "README.markdown", "README.rst", "docs/README.md"]
+        let candidates = (isChinese ? zhCandidates : []) + standardCandidates
+        
         for f in candidates {
             let full = path + "/" + f
             if let md = try? String(contentsOfFile: full, encoding: .utf8), !md.isEmpty {
@@ -331,7 +397,7 @@ extension RadarScanner {
     // 从 README 提取图片地址：本地相对路径解析为绝对路径，网络图保留 http；过滤徽章/svg。
     static func extractReadmeImages(_ md: String, repoPath: String, fileSubdir: String) -> [String] {
         var urls: [String] = []
-        let patterns = [#"!\[[^\]]*\]\(([^)\s]+)"#, #"<img[^>]+src=[\"']([^\"']+)[\"']"#]
+        let patterns = [#"!\[[^\]]*\]\(([^)\s]+)"#, #"<img[^>]+src=[\"']([^\"']+)[\"'][^>]*>"#]
         for pattern in patterns {
             guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
             let ns = md as NSString
@@ -339,13 +405,58 @@ extension RadarScanner {
                 guard let m = m, m.numberOfRanges >= 2 else { return }
                 var src = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
                 let low = src.lowercased()
-                // 过滤徽章 / 矢量图标 / 占位
+                
+                // 1. 过滤徽章 / 状态图标 / 矢量图
                 if low.contains("shields.io") || low.contains("badge") || low.hasSuffix(".svg")
-                    || low.contains("img.shields") { return }
+                    || low.contains("img.shields") || low.contains("license") || low.contains("licence") { return }
+                    
+                // 2. 过滤赞助 / 捐赠 / 支付 / 赞赏码
+                if low.contains("sponsor") || low.contains("donate") || low.contains("donation")
+                    || low.contains("patreon") || low.contains("paypal") || low.contains("alipay")
+                    || low.contains("wechatpay") || low.contains("wxpay") || low.contains("pay")
+                    || low.contains("赞赏") || low.contains("赏") || low.contains("收款") { return }
+                    
+                // 3. 过滤二维码 / 关注 / 社交按钮
+                if low.contains("qrcode") || low.contains("qr_code") || low.contains("qr") || low.contains("扫码")
+                    || low.contains("follow") || low.contains("discord") || low.contains("twitter") || low.contains("facebook") { return }
+                
+                // 4. 过滤头像 / 贡献者列表
+                if low.contains("avatar") || low.contains("contrib") || low.contains("member") { return }
+                
+                // 5. 过滤 Logo / 横幅 / 星标增长图
+                if low.contains("logo") || low.contains("banner") || low.contains("star-history") || low.contains("trending") { return }
+                
+                // 6. 如果是 HTML img 标签，检查是否指定了微小的高度或宽度（例如 height="60" 或 width="10%" 代表图标/徽章）
+                if let range = Range(m.range(at: 0), in: md) {
+                    let tagText = String(md[range]).lowercased()
+                    if let heightRange = tagText.range(of: #"height\s*=\s*['"]?(\d+)['"]?"#, options: .regularExpression) {
+                        let heightStr = tagText[heightRange].components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+                        if let h = Int(heightStr), h <= 100 {
+                            return
+                        }
+                    }
+                    if let widthRange = tagText.range(of: #"width\s*=\s*['"]?(\d+)%?['"]?"#, options: .regularExpression) {
+                        let widthStr = tagText[widthRange].components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+                        if let w = Int(widthStr), w <= 15 {
+                            return
+                        }
+                    }
+                }
+                
                 if src.hasPrefix("http") {
+                    // 自动把 github.com 的网页型 blob 图片链接重写为 raw 直链，解决类似 hermes-web-ui 预览图加载失败的问题
+                    if src.contains("github.com/") && src.contains("/blob/") {
+                        src = src.replacingOccurrences(of: "/blob/", with: "/raw/")
+                    }
                     urls.append(src)
+                } else if repoPath.hasPrefix("http") {
+                    // 远程相对路径（解决 Node/Homebrew 远程获取 README 的相对图片解析）
+                    src = src.replacingOccurrences(of: "./", with: "")
+                    let base = fileSubdir.isEmpty ? repoPath : repoPath + "/" + fileSubdir
+                    let full = src.hasPrefix("/") ? repoPath + src : base + "/" + src
+                    urls.append(full)
                 } else {
-                    // 相对路径 → 解析为本地绝对路径，并校验是有效图片
+                    // 本地相对路径 → 解析为本地绝对路径，并校验是有效图片
                     src = src.replacingOccurrences(of: "./", with: "")
                     let base = fileSubdir.isEmpty ? repoPath : repoPath + "/" + fileSubdir
                     let full = src.hasPrefix("/") ? repoPath + src : base + "/" + src
@@ -359,5 +470,123 @@ extension RadarScanner {
         var seen = Set<String>(); var result: [String] = []
         for u in urls where !seen.contains(u) { seen.insert(u); result.append(u); if result.count >= 6 { break } }
         return result
+    }
+    
+    // 刷新所有 Git 项目的运行状态和端口
+    func refreshGitProjectStatus() {
+        DispatchQueue.global(qos: .utility).async {
+            // Get CWD of all running processes: PID -> CWD
+            var pidToCwd: [Int: String] = [:]
+            let lsofCwdOut = ProcessRunner.runCommand("lsof -a -d cwd -Fn 2>/dev/null")
+            var currentPid = 0
+            for line in lsofCwdOut.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("p") {
+                    if let pidVal = Int(trimmed.dropFirst()) {
+                        currentPid = pidVal
+                    }
+                } else if trimmed.hasPrefix("n") && currentPid != 0 {
+                    let cwdPath = String(trimmed.dropFirst())
+                    pidToCwd[currentPid] = cwdPath
+                }
+            }
+            
+            // Get listening ports per PID
+            let lsofPortOut = ProcessRunner.runCommand("lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null")
+            var pidToPort: [Int: Int] = [:]
+            for line in lsofPortOut.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("COMMAND") { continue }
+                let parts = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+                if parts.count >= 9, let pid = Int(parts[1]) {
+                    let addr = parts[8]
+                    if let c = addr.lastIndex(of: ":"), let port = Int(addr[addr.index(after: c)...]) {
+                        pidToPort[pid] = port
+                    }
+                }
+            }
+            
+            // Scan Git apps
+            let gitApps = (self.installed + self.updates).filter { $0.category == .git }
+            for app in gitApps {
+                guard let localPath = app.localPath else { continue }
+                let canonicalPath = URL(fileURLWithPath: localPath).resolvingSymlinksInPath().path
+                
+                var runningPids: [Int] = []
+                var port: Int? = nil
+                
+                for (pid, cwd) in pidToCwd {
+                    let canonicalCwd = URL(fileURLWithPath: cwd).resolvingSymlinksInPath().path
+                    if canonicalCwd == canonicalPath || canonicalCwd.hasPrefix(canonicalPath + "/") {
+                        runningPids.append(pid)
+                        if let p = pidToPort[pid] {
+                            port = p
+                        }
+                    }
+                }
+                
+                let isRunning = !runningPids.isEmpty
+                let pidsArr = runningPids
+                let finalPort = port
+                DispatchQueue.main.async {
+                    app.runningPids = pidsArr
+                    app.isRunning = isRunning
+                    app.servicePort = finalPort
+                }
+            }
+        }
+    }
+    
+    // 启动 Git 项目：打开 Terminal 并在对应目录下自动执行可能存在的启动脚本
+    func startGitProject(_ app: RadarUpdateApp) {
+        guard app.category == .git, !app.isStartingOrStopping, let localPath = app.localPath else { return }
+        DispatchQueue.main.async { app.isStartingOrStopping = true }
+        DispatchQueue.global(qos: .userInitiated).async {
+            var startupCmd = ""
+            if FileManager.default.fileExists(atPath: localPath + "/kiro-go") {
+                startupCmd = "./kiro-go"
+            } else if FileManager.default.fileExists(atPath: localPath + "/package.json") {
+                startupCmd = "npm run dev"
+            } else if FileManager.default.fileExists(atPath: localPath + "/main.py") {
+                startupCmd = "python3 main.py"
+            } else if FileManager.default.fileExists(atPath: localPath + "/go.mod") {
+                startupCmd = "go run ."
+            }
+            
+            let cdCmd = "cd \(self.shellQuote(localPath))" + (startupCmd.isEmpty ? "" : " && \(startupCmd)")
+            let escaped = cdCmd.replacingOccurrences(of: "\"", with: "\\\"")
+            _ = ProcessRunner.runCommand("osascript -e 'tell application \"Terminal\" to do script \"\(escaped)\"' -e 'tell application \"Terminal\" to activate' 2>&1")
+            
+            Thread.sleep(forTimeInterval: 2.5)
+            self.refreshGitProjectStatus()
+            DispatchQueue.main.async { app.isStartingOrStopping = false }
+        }
+    }
+    
+    // 停止 Git 项目：杀死所有属于该项目工作目录下的进程
+    func stopGitProject(_ app: RadarUpdateApp) {
+        guard app.category == .git, !app.isStartingOrStopping else { return }
+        let pids = app.runningPids
+        DispatchQueue.main.async { app.isStartingOrStopping = true }
+        DispatchQueue.global(qos: .userInitiated).async {
+            for pid in pids {
+                _ = ProcessRunner.runCommand("kill -9 \(pid) 2>/dev/null")
+            }
+            Thread.sleep(forTimeInterval: 1.5)
+            self.refreshGitProjectStatus()
+            DispatchQueue.main.async { app.isStartingOrStopping = false }
+        }
+    }
+    
+    // 打开 Git 项目的 Web 控制台
+    func openGitProjectUI(_ app: RadarUpdateApp) {
+        guard let port = app.servicePort else { return }
+        var urlString = "http://localhost:\(port)"
+        if app.name.lowercased().contains("kiro") {
+            urlString += "/admin"
+        }
+        if let url = URL(string: urlString) {
+            NSWorkspace.shared.open(url)
+        }
     }
 }

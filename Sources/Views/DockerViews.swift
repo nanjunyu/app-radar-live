@@ -54,16 +54,30 @@ struct DockerContainerListView: View {
                     Divider()
                     
                     if filteredContainers.isEmpty {
-                        VStack {
-                            Image(systemName: "shippingbox")
-                                .font(.system(size: 40))
-                                .foregroundColor(.gray.opacity(0.5))
-                            Text("未发现 Docker 容器")
-                                .font(.callout)
-                                .foregroundColor(.gray)
+                        if live.isDockerFirstLoad {
+                            // 首次加载中：显示扫描指示器
+                            VStack(spacing: 12) {
+                                ProgressView()
+                                    .scaleEffect(1.2)
+                                Text("正在扫描 Docker 容器…")
+                                    .font(.callout)
+                                    .foregroundColor(.gray)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color(NSColor.controlBackgroundColor))
+                        } else {
+                            // 数据已加载完成但确实没有容器
+                            VStack {
+                                Image(systemName: "shippingbox")
+                                    .font(.system(size: 40))
+                                    .foregroundColor(.gray.opacity(0.5))
+                                Text("未发现 Docker 容器")
+                                    .font(.callout)
+                                    .foregroundColor(.gray)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color(NSColor.controlBackgroundColor))
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color(NSColor.controlBackgroundColor))
                     } else {
                         ScrollView {
                             LazyVStack(spacing: 0) {
