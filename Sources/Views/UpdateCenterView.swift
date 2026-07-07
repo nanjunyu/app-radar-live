@@ -5,37 +5,38 @@ import AppKit
 struct UpdateCenterView: View {
     @ObservedObject var scanner: RadarScanner
     var accentColor: Color
-    var category: UpdateCategory
     @State private var searchText = ""
     @State private var selectedTab = "installed"  // 默认显示「已安装」
+    @State private var selectedCategoryTab = "all" // 当前选中的分类 Tab: all, appStore, brew, node, git, other
     
-    var title: String {
-        switch category {
-        case .appStore: return "App Store 更新"
-        case .brew: return "Homebrew"
-        case .node: return "Node 全局包"
-        case .git: return "Git 项目"
-        case .other: return "其他"
-        }
-    }
+    var title: String { "应用与更新" }
     
     var filteredUpdates: [RadarUpdateApp] {
-        var res = scanner.updates.filter { $0.category == category }
+        var res = scanner.updates
+        if let targetCategory = categoryMap(selectedCategoryTab) {
+            res = res.filter { $0.category == targetCategory }
+        }
         if !searchText.isEmpty { res = res.filter { $0.name.localizedCaseInsensitiveContains(searchText) } }
         return res
     }
     
     var filteredInstalled: [RadarUpdateApp] {
-        var res = scanner.installed.filter { $0.category == category }
+        var res = scanner.installed
+        if let targetCategory = categoryMap(selectedCategoryTab) {
+            res = res.filter { $0.category == targetCategory }
+        }
         if !searchText.isEmpty { res = res.filter { $0.name.localizedCaseInsensitiveContains(searchText) } }
         return res
     }
     
-    // 该渠道是否正在扫描（Git / 其他 用各自专用慢扫描标志）
+    // 是否正在扫描
     var isScanning: Bool {
-        switch category {
-        case .git: return scanner.isScanningGit
-        case .other: return scanner.isScanningOther
+        if selectedCategoryTab == "all" {
+            return scanner.isScanningUpdates || scanner.isScanningGit || scanner.isScanningOther
+        }
+        switch selectedCategoryTab {
+        case "git": return scanner.isScanningGit
+        case "other": return scanner.isScanningOther
         default: return scanner.isScanningUpdates
         }
     }
@@ -63,11 +64,31 @@ struct UpdateCenterView: View {
                         .clipShape(Capsule())
                     }.padding(.horizontal, 30).padding(.top, 20)
                     
+                    // 分类 Tab 栏
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            categoryTabButton("全部", tag: "all")
+                            categoryTabButton("App Store", tag: "appStore")
+                            categoryTabButton("Homebrew", tag: "brew")
+                            if scanner.hasNpm {
+                                categoryTabButton("Node.js", tag: "node")
+                            }
+                            if scanner.hasGit {
+                                categoryTabButton("Git 项目", tag: "git")
+                            }
+                            if scanner.hasOther {
+                                categoryTabButton("其他", tag: "other")
+                            }
+                        }
+                        .padding(.horizontal, 30)
+                        .padding(.vertical, 4)
+                    }
+                    
                     if selectedTab == "pending" {
                         if isScanning && filteredUpdates.isEmpty {
                             VStack(spacing: 14) {
                                 ProgressView().scaleEffect(1.2)
-                                Text(category == .git ? "正在扫描 Git 仓库…" : "正在检查更新…").font(.title3).foregroundColor(.gray)
+                                Text(selectedCategoryTab == "git" ? "正在扫描 Git 仓库…" : (selectedCategoryTab == "all" ? "正在全局扫描…" : "正在检查更新…")).font(.title3).foregroundColor(.gray)
                             }.frame(maxWidth: .infinity, minHeight: 300)
                         } else if filteredUpdates.isEmpty {
                             VStack {
@@ -97,7 +118,7 @@ struct UpdateCenterView: View {
                         if isScanning && filteredInstalled.isEmpty {
                             VStack(spacing: 14) {
                                 ProgressView().scaleEffect(1.2)
-                                Text(category == .git ? "正在扫描 Git 仓库…" : "正在加载…").font(.title3).foregroundColor(.gray)
+                                Text(selectedCategoryTab == "git" ? "正在扫描 Git 仓库…" : (selectedCategoryTab == "all" ? "正在全局扫描…" : "正在加载…")).font(.title3).foregroundColor(.gray)
                             }.frame(maxWidth: .infinity, minHeight: 300)
                         } else if filteredInstalled.isEmpty {
                             VStack {
@@ -135,6 +156,72 @@ struct UpdateCenterView: View {
         .buttonStyle(PlainButtonStyle())
     }
     
+    @ViewBuilder
+    private func categoryTabButton(_ title: String, tag: String) -> some View {
+        let isSelected = selectedCategoryTab == tag
+        let count = getAppCount(for: tag)
+        Button(action: {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                selectedCategoryTab = tag
+            }
+        }) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                    .foregroundColor(isSelected ? accentColor : .primary)
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(isSelected ? .white : .secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(isSelected ? accentColor : Color.gray.opacity(0.18))
+                        .clipShape(Capsule())
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(isSelected ? accentColor.opacity(0.12) : Color.clear)
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .strokeBorder(isSelected ? accentColor.opacity(0.3) : Color.gray.opacity(0.15), lineWidth: 1)
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+    
+    private func getAppCount(for tag: String) -> Int {
+        var allApps = (selectedTab == "pending" ? scanner.updates : scanner.installed)
+        if selectedTab == "pending" {
+            // 只统计真正待更新的（过滤掉已忽略和已升级的项目）
+            allApps = allApps.filter { !$0.upgraded && !$0.ignored }
+        }
+        let filteredByCategory: [RadarUpdateApp]
+        if let targetCategory = categoryMap(tag) {
+            filteredByCategory = allApps.filter { $0.category == targetCategory }
+        } else {
+            filteredByCategory = allApps
+        }
+        
+        if searchText.isEmpty {
+            return filteredByCategory.count
+        } else {
+            return filteredByCategory.filter { $0.name.localizedCaseInsensitiveContains(searchText) }.count
+        }
+    }
+    
+    private func categoryMap(_ tag: String) -> UpdateCategory? {
+        switch tag {
+        case "appStore": return .appStore
+        case "brew": return .brew
+        case "node": return .node
+        case "git": return .git
+        case "other": return .other
+        default: return nil
+        }
+    }
+    
     private func upgradeAll() {
         for app in filteredUpdates where !app.isUpgrading && !app.upgraded {
             switch app.category {
@@ -169,14 +256,22 @@ struct AppGridCardWithAction: View {
                 } else { fallbackIcon }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(app.bestName)
-                        .font(.system(size: 14, weight: .semibold))
-                        .lineLimit(1).truncationMode(.tail)
-                        .foregroundColor(.primary)
+                    HStack(alignment: .center, spacing: 6) {
+                        Text(app.bestName)
+                            .font(.system(size: 14, weight: .semibold))
+                            .lineLimit(1).truncationMode(.tail)
+                            .foregroundColor(.primary)
+                        Text(app.category.cleanName)
+                            .font(.system(size: 8, weight: .bold))
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .foregroundColor(.white)
+                            .background(app.category.color.opacity(0.85))
+                            .clipShape(Capsule())
+                    }
                     if let date = app.releaseDate {
                         Text(date).font(.system(size: 11)).foregroundColor(.gray)
                     } else {
-                        Text(app.developer ?? app.category.rawValue).font(.system(size: 11)).foregroundColor(.gray)
+                        Text(app.developer ?? app.category.cleanName).font(.system(size: 11)).foregroundColor(.gray)
                     }
                     if let cur = app.currentVersion, let latest = app.latestVersion {
                         Text("\(cur) → \(latest)")
@@ -184,13 +279,26 @@ struct AppGridCardWithAction: View {
                             .foregroundColor(accentColor)
                             .lineLimit(1)
                     }
-                    Text(app.releaseNotes ?? app.descriptionText ?? "查看更新内容")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 2)
+                    if let msg = app.upgradeMessage {
+                        Text(msg)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(
+                                msg.contains("失败") || msg.contains("错误") || msg.contains("⚠️") ? .red :
+                                (msg.contains("成功") || msg.contains("✅") ? .green : .orange)
+                            )
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 2)
+                    } else {
+                        Text(app.releaseNotes ?? app.descriptionText ?? "查看更新内容")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 2)
+                    }
                     // Git 项目额外信息：语言 / star / fork / 更新时间
                     if app.category == .git {
                         HStack(spacing: 10) {
@@ -287,9 +395,28 @@ struct ReadmeImageView: View {
     let src: String
     var body: some View {
         if src.hasPrefix("http"), let u = URL(string: src) {
-            CachedAsyncImage(url: u) { EmptyView() }
-                .frame(height: 200).cornerRadius(16)
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.gray.opacity(0.15), lineWidth: 1))
+            CachedAsyncImage(url: u) {
+                // 加载占位符：显示轻量灰色圆角矩形与微型转轮，防止宽度塌陷为 0，符合高级视觉设计
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.gray.opacity(0.08))
+                    .frame(width: 320, height: 200)
+                    .overlay(ProgressView().scaleEffect(0.8))
+            } failure: {
+                // 失败占位符：优雅的失效卡片提示，防止一直转圈圈
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.gray.opacity(0.04))
+                    .frame(width: 320, height: 200)
+                    .overlay(
+                        VStack(spacing: 8) {
+                            Image(systemName: "photo.on.rectangle.angled")
+                                .font(.title)
+                                .foregroundColor(.gray.opacity(0.5))
+                            Text("预览图加载失败").font(.caption).foregroundColor(.gray.opacity(0.5))
+                        }
+                    )
+            }
+            .frame(height: 200).cornerRadius(16)
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.gray.opacity(0.15), lineWidth: 1))
         } else if let nsImg = NSImage(contentsOfFile: src) {
             Image(nsImage: nsImg).resizable().scaledToFit()
                 .frame(height: 200).cornerRadius(16)
@@ -318,17 +445,32 @@ struct AppGridCard: View {
 
             // Text block
             VStack(alignment: .leading, spacing: 3) {
-                Text(app.bestName)
-                    .font(.system(size: 14, weight: .semibold))
-                    .lineLimit(1).truncationMode(.tail)
-                    .foregroundColor(.primary)
+                HStack(alignment: .center, spacing: 6) {
+                    Text(app.bestName)
+                        .font(.system(size: 14, weight: .semibold))
+                        .lineLimit(1).truncationMode(.tail)
+                        .foregroundColor(.primary)
+                    Text(app.category.cleanName)
+                        .font(.system(size: 8, weight: .bold))
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .foregroundColor(.white)
+                        .background(app.category.color.opacity(0.85))
+                        .clipShape(Capsule())
+                }
                 if let date = app.releaseDate {
                     Text(date).font(.system(size: 11)).foregroundColor(.gray)
                 } else {
-                    Text(app.developer ?? app.category.rawValue).font(.system(size: 11)).foregroundColor(.gray)
+                    Text(app.developer ?? app.category.cleanName).font(.system(size: 11)).foregroundColor(.gray)
                 }
-                if let cur = app.currentVersion, let latest = app.latestVersion {
-                    Text("\(cur) → \(latest)")
+                if let cur = app.currentVersion {
+                    let versionText: String = {
+                        if let latest = app.latestVersion, latest != cur {
+                            return "\(cur) → \(latest)"
+                        } else {
+                            return "版本 \(cur)"
+                        }
+                    }()
+                    Text(versionText)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(accentColor)
                         .lineLimit(1)
@@ -362,13 +504,13 @@ struct AppGridCard: View {
                         }
                     }.padding(.top, 1)
                 }
-                // Node 包：运行状态指示
-                if app.category == .node {
+                // Node 包 & Git 项目 & Brew 服务：运行状态指示
+                if app.category == .node || app.category == .git || (app.category == .brew && app.isBrewService) {
                     HStack(spacing: 6) {
                         Circle()
                             .fill(app.isRunning ? Color.green : Color.gray.opacity(0.4))
                             .frame(width: 7, height: 7)
-                        Text(app.isRunning ? "运行中" : "未运行")
+                        Text(app.isRunning ? "运行中" : "已停止")
                             .font(.system(size: 10)).foregroundColor(app.isRunning ? .green : .secondary)
                         if let port = app.servicePort {
                             Text(":\(port)").font(.system(size: 9, design: .monospaced)).foregroundColor(.secondary)
@@ -377,23 +519,39 @@ struct AppGridCard: View {
                 }
             }
             Spacer(minLength: 0)
-            // Node 包：列表内联启停按钮
-            if app.category == .node {
+            // Node 包 & Git 项目 & Brew 服务：列表内联启停与打开控制
+            if app.category == .node || app.category == .git || (app.category == .brew && app.isBrewService) {
                 VStack {
                     Spacer()
                     if app.isStartingOrStopping {
                         ProgressView().scaleEffect(0.7).frame(width: 28, height: 28)
                     } else if app.isRunning {
                         HStack(spacing: 6) {
-                            Button(action: { scanner.stopNodeService(app) }) {
+                            Button(action: {
+                                if app.category == .node {
+                                    scanner.stopNodeService(app)
+                                } else if app.category == .brew {
+                                    scanner.stopBrewService(app)
+                                } else {
+                                    scanner.stopGitProject(app)
+                                }
+                            }) {
                                 Text("停止").font(.system(size: 12, weight: .medium))
                                     .foregroundColor(.white)
                                     .padding(.horizontal, 10).padding(.vertical, 4)
                                     .background(Color.red.opacity(0.8)).cornerRadius(10)
                             }.buttonStyle(PlainButtonStyle())
                             if app.servicePort != nil {
-                                Button(action: { scanner.openNodeServiceUI(app) }) {
-                                    Text("打开").font(.system(size: 12, weight: .medium))
+                                Button(action: {
+                                    if app.category == .node {
+                                        scanner.openNodeServiceUI(app)
+                                    } else if app.category == .brew {
+                                        scanner.openBrewServiceUI(app)
+                                    } else {
+                                        scanner.openGitProjectUI(app)
+                                    }
+                                }) {
+                                    Text("控制台").font(.system(size: 12, weight: .medium))
                                         .foregroundColor(accentColor)
                                         .padding(.horizontal, 10).padding(.vertical, 4)
                                         .background(accentColor.opacity(0.12)).cornerRadius(10)
@@ -401,26 +559,31 @@ struct AppGridCard: View {
                             }
                         }
                     } else {
-                        Button(action: { scanner.startNodeService(app) }) {
-                            Text("启动").font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 10).padding(.vertical, 4)
-                                .background(Color.green).cornerRadius(10)
-                        }.buttonStyle(PlainButtonStyle())
+                        HStack(spacing: 6) {
+                            Button(action: {
+                                if app.category == .node {
+                                    scanner.startNodeService(app)
+                                } else if app.category == .brew {
+                                    scanner.startBrewService(app)
+                                } else {
+                                    scanner.startGitProject(app)
+                                }
+                            }) {
+                                Text("启动").font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 10).padding(.vertical, 4)
+                                    .background(Color.green).cornerRadius(10)
+                            }.buttonStyle(PlainButtonStyle())
+                            if app.category == .git {
+                                Button(action: { scanner.revealInFinder(app) }) {
+                                    Text("访达").font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(accentColor)
+                                        .padding(.horizontal, 10).padding(.vertical, 4)
+                                        .background(accentColor.opacity(0.12)).cornerRadius(10)
+                                }.buttonStyle(PlainButtonStyle())
+                            }
+                        }
                     }
-                    Spacer()
-                }
-            }
-            // Git 项目：打开访达
-            if app.category == .git {
-                VStack {
-                    Spacer()
-                    Button(action: { scanner.revealInFinder(app) }) {
-                        Text("打开").font(.system(size: 12, weight: .medium))
-                            .foregroundColor(accentColor)
-                            .padding(.horizontal, 10).padding(.vertical, 4)
-                            .background(accentColor.opacity(0.12)).cornerRadius(10)
-                    }.buttonStyle(PlainButtonStyle())
                     Spacer()
                 }
             }
@@ -461,6 +624,15 @@ struct AppDetailView: View {
     @ObservedObject var scanner: RadarScanner
     var accentColor: Color
     
+    @State private var showingForceUpdateSheet = false
+    @State private var forceUpdateInput = ""
+    
+    private func confirmForceUpdate() {
+        showingForceUpdateSheet = false
+        forceUpdateInput = ""
+        scanner.forceUpgradeGitRepo(app)
+    }
+    
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
@@ -469,34 +641,58 @@ struct AppDetailView: View {
                     else if let url = app.logoUrl { CachedAsyncImage(url: url) { fallbackIcon }.frame(width: 120, height: 120).cornerRadius(26) } else { fallbackIcon }
                     VStack(alignment: .leading, spacing: 10) {
                         Text(app.bestName).font(.system(size: 32, weight: .bold))
-                        Text(app.developer ?? app.category.rawValue).font(.title3).foregroundColor(.gray)
+                        Text(app.developer ?? app.category.cleanName).font(.title3).foregroundColor(.gray)
                         HStack(spacing: 12) {
                             if app.upgraded {
-                                if app.category == .node || app.category == .git || (app.category == .other && app.sourceKind == .cliTool) {
-                                    // 命令行工具 / Git 仓库
+                                if app.category == .node || app.category == .git || (app.category == .brew && app.isBrewService) || (app.category == .other && app.sourceKind == .cliTool) {
+                                    // 命令行工具 / Git 仓库 / Brew 服务
                                     Text("✅ 已是最新").font(.headline).foregroundColor(.green)
                                         .padding(.horizontal, 24).padding(.vertical, 10)
-                                    // Node 包：启动/停止按钮
-                                    if app.category == .node {
+                                    // Node 包 & Git 项目 & Brew 服务：启动/停止与控制台按钮
+                                    if app.category == .node || app.category == .git || (app.category == .brew && app.isBrewService) {
                                         if app.isStartingOrStopping {
                                             ProgressView().scaleEffect(0.7).frame(width: 24, height: 24)
                                         } else if app.isRunning {
-                                            Button(action: { scanner.stopNodeService(app) }) {
-                                                Label("停止", systemImage: "stop.circle")
-                                                    .font(.subheadline).foregroundColor(.white)
-                                                    .padding(.horizontal, 16).padding(.vertical, 9)
-                                                    .background(Color.red.opacity(0.85)).cornerRadius(18)
-                                            }.buttonStyle(PlainButtonStyle())
-                                            if app.servicePort != nil {
-                                                Button(action: { scanner.openNodeServiceUI(app) }) {
-                                                    Label("打开", systemImage: "globe")
-                                                        .font(.subheadline).foregroundColor(accentColor)
+                                            HStack(spacing: 12) {
+                                                Button(action: {
+                                                    if app.category == .node {
+                                                        scanner.stopNodeService(app)
+                                                    } else if app.category == .brew {
+                                                        scanner.stopBrewService(app)
+                                                    } else {
+                                                        scanner.stopGitProject(app)
+                                                    }
+                                                }) {
+                                                    Label("停止", systemImage: "stop.circle")
+                                                        .font(.subheadline).foregroundColor(.white)
                                                         .padding(.horizontal, 16).padding(.vertical, 9)
-                                                        .background(accentColor.opacity(0.12)).cornerRadius(18)
+                                                        .background(Color.red.opacity(0.85)).cornerRadius(18)
                                                 }.buttonStyle(PlainButtonStyle())
+                                                if app.servicePort != nil {
+                                                    Button(action: {
+                                                        if app.category == .node {
+                                                            scanner.openNodeServiceUI(app)
+                                                        } else {
+                                                            scanner.openGitProjectUI(app)
+                                                        }
+                                                    }) {
+                                                        Label("控制台", systemImage: "globe")
+                                                            .font(.subheadline).foregroundColor(accentColor)
+                                                            .padding(.horizontal, 16).padding(.vertical, 9)
+                                                            .background(accentColor.opacity(0.12)).cornerRadius(18)
+                                                    }.buttonStyle(PlainButtonStyle())
+                                                }
                                             }
                                         } else {
-                                            Button(action: { scanner.startNodeService(app) }) {
+                                            Button(action: {
+                                                if app.category == .node {
+                                                    scanner.startNodeService(app)
+                                                } else if app.category == .brew {
+                                                    scanner.startBrewService(app)
+                                                } else {
+                                                    scanner.startGitProject(app)
+                                                }
+                                            }) {
                                                 Label("启动", systemImage: "play.circle")
                                                     .font(.subheadline).foregroundColor(.white)
                                                     .padding(.horizontal, 16).padding(.vertical, 9)
@@ -507,13 +703,42 @@ struct AppDetailView: View {
                                 } else {
                                     // App Store / Homebrew / 独立应用，有 GUI，显示「打开」
                                     Button(action: { scanner.launchApp(app) }) {
-                                        Text("打开")
-                                            .font(.headline).foregroundColor(.white)
-                                            .padding(.horizontal, 28).padding(.vertical, 10)
-                                            .background(accentColor).cornerRadius(20)
+                                        Label("打开", systemImage: "arrow.up.forward.app")
+                                            .font(.subheadline).foregroundColor(accentColor)
+                                            .padding(.horizontal, 16).padding(.vertical, 9)
+                                            .background(accentColor.opacity(0.12)).cornerRadius(18)
                                     }.buttonStyle(PlainButtonStyle())
                                 }
+                                
+                                // 取消忽略按钮
+                                if app.ignored {
+                                    Button(action: { scanner.setIgnored(app, false) }) {
+                                        Label("取消忽略", systemImage: "eye")
+                                            .font(.subheadline).foregroundColor(accentColor)
+                                            .padding(.horizontal, 16).padding(.vertical, 9)
+                                            .background(accentColor.opacity(0.12)).cornerRadius(18)
+                                    }.buttonStyle(PlainButtonStyle()).help("恢复提醒")
+                                }
+                                
+                                // Git 项目：已是最新状态下的手动处理入口（终端、访达）
+                                if app.category == .git {
+                                    Button(action: { scanner.openInTerminal(app) }) {
+                                        Label("终端", systemImage: "terminal")
+                                            .font(.subheadline).foregroundColor(accentColor)
+                                            .padding(.horizontal, 16).padding(.vertical, 9)
+                                            .background(accentColor.opacity(0.12)).cornerRadius(18)
+                                    }.buttonStyle(PlainButtonStyle()).help("在终端打开项目目录")
+                                    Button(action: { scanner.revealInFinder(app) }) {
+                                        Label("访达", systemImage: "folder")
+                                            .font(.subheadline).foregroundColor(accentColor)
+                                            .padding(.horizontal, 16).padding(.vertical, 9)
+                                            .background(accentColor.opacity(0.12)).cornerRadius(18)
+                                    }.buttonStyle(PlainButtonStyle()).help("在访达中显示项目目录")
+                                }
                             } else {
+                                // ===== 未升级状态 =====
+                                
+                                // 1. 拉取更新 / 升级按钮
                                 Button(action: {
                                     switch app.category {
                                     case .appStore: scanner.upgradeMasApp(app)
@@ -523,16 +748,65 @@ struct AppDetailView: View {
                                     case .other: scanner.upgradeOther(app)
                                     }
                                 }) {
-                                    HStack(spacing: 8) {
-                                        if app.isUpgrading { ProgressView().scaleEffect(0.6).frame(width: 14, height: 14) }
-                                        Text(app.isUpgrading ? "升级中…" : (app.category == .git ? "拉取更新 (git pull)" : (app.sourceKind == .sparkleApp ? "打开并更新" : "升级到最新版")))
-                                            .font(.headline).foregroundColor(.white)
+                                    HStack(spacing: 6) {
+                                        if app.isUpgrading {
+                                            ProgressView().scaleEffect(0.6).frame(width: 12, height: 12)
+                                        } else {
+                                            Image(systemName: "arrow.down.circle").font(.system(size: 13, weight: .medium))
+                                        }
+                                        Text(app.isUpgrading ? "升级中…" : (app.category == .git ? "拉取更新" : (app.sourceKind == .sparkleApp ? "打开并更新" : "升级到最新版")))
+                                            .font(.subheadline).bold()
                                     }
-                                    .padding(.horizontal, 24).padding(.vertical, 10)
-                                    .background(accentColor).cornerRadius(20).opacity(app.isUpgrading ? 0.7 : 1.0)
+                                    .foregroundColor(accentColor)
+                                    .padding(.horizontal, 16).padding(.vertical, 9)
+                                    .background(accentColor.opacity(0.12)).cornerRadius(18)
+                                    .opacity(app.isUpgrading ? 0.7 : 1.0)
                                 }
                                 .buttonStyle(PlainButtonStyle())
                                 .disabled(app.isUpgrading)
+                                
+                                // 2. 强制更新 (仅 Git 项目且未升级)
+                                if app.category == .git {
+                                    Button(action: { showingForceUpdateSheet = true }) {
+                                        Label("强制更新", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                                            .font(.subheadline).foregroundColor(accentColor)
+                                            .padding(.horizontal, 16).padding(.vertical, 9)
+                                            .background(accentColor.opacity(0.12)).cornerRadius(18)
+                                    }.buttonStyle(PlainButtonStyle()).help("放弃本地修改，强制以远端为准")
+                                }
+                                
+                                // 3. 忽略更新 / 取消忽略按钮
+                                if !app.ignored {
+                                    Button(action: { scanner.setIgnored(app, true) }) {
+                                        Label("忽略更新", systemImage: "eye.slash")
+                                            .font(.subheadline).foregroundColor(accentColor)
+                                            .padding(.horizontal, 16).padding(.vertical, 9)
+                                            .background(accentColor.opacity(0.12)).cornerRadius(18)
+                                    }.buttonStyle(PlainButtonStyle()).help("忽略本次更新，不再计入角标")
+                                } else {
+                                    Button(action: { scanner.setIgnored(app, false) }) {
+                                        Label("取消忽略", systemImage: "eye")
+                                            .font(.subheadline).foregroundColor(accentColor)
+                                            .padding(.horizontal, 16).padding(.vertical, 9)
+                                            .background(accentColor.opacity(0.12)).cornerRadius(18)
+                                    }.buttonStyle(PlainButtonStyle()).help("恢复提醒")
+                                }
+                                
+                                // 4. 终端 & 访达 (仅 Git 项目)
+                                if app.category == .git {
+                                    Button(action: { scanner.openInTerminal(app) }) {
+                                        Label("终端", systemImage: "terminal")
+                                            .font(.subheadline).foregroundColor(accentColor)
+                                            .padding(.horizontal, 16).padding(.vertical, 9)
+                                            .background(accentColor.opacity(0.12)).cornerRadius(18)
+                                    }.buttonStyle(PlainButtonStyle()).help("在终端打开项目目录")
+                                    Button(action: { scanner.revealInFinder(app) }) {
+                                        Label("访达", systemImage: "folder")
+                                            .font(.subheadline).foregroundColor(accentColor)
+                                            .padding(.horizontal, 16).padding(.vertical, 9)
+                                            .background(accentColor.opacity(0.12)).cornerRadius(18)
+                                    }.buttonStyle(PlainButtonStyle()).help("在访达中显示项目目录")
+                                }
                                 
                                 if app.category == .appStore {
                                     Button(action: { scanner.openInAppStore(app: app) }) {
@@ -541,48 +815,17 @@ struct AppDetailView: View {
                                 }
                             }
                             
-                            // Git 项目：手动处理入口（更新失败/分叉时可在终端 merge，或在访达中查看）
-                            if app.category == .git {
-                                Button(action: { scanner.openInTerminal(app) }) {
-                                    Label("终端", systemImage: "terminal")
-                                        .font(.subheadline).foregroundColor(accentColor)
-                                        .padding(.horizontal, 16).padding(.vertical, 9)
-                                        .background(accentColor.opacity(0.12)).cornerRadius(18)
-                                }.buttonStyle(PlainButtonStyle()).help("在终端打开项目目录")
-                                Button(action: { scanner.revealInFinder(app) }) {
-                                    Label("访达", systemImage: "folder")
-                                        .font(.subheadline).foregroundColor(accentColor)
-                                        .padding(.horizontal, 16).padding(.vertical, 9)
-                                        .background(accentColor.opacity(0.12)).cornerRadius(18)
-                                }.buttonStyle(PlainButtonStyle()).help("在访达中显示项目目录")
-                            }
-                            
-                            // 忽略按钮：本次不再提示更新，不计入角标
-                            if !app.upgraded && !app.ignored {
-                                Button(action: { scanner.setIgnored(app, true) }) {
-                                    Label("忽略更新", systemImage: "eye.slash")
-                                        .font(.subheadline).foregroundColor(accentColor)
-                                        .padding(.horizontal, 16).padding(.vertical, 9)
-                                        .background(accentColor.opacity(0.12)).cornerRadius(18)
-                                }.buttonStyle(PlainButtonStyle()).help("忽略本次更新，不再计入角标")
-                            }
-                            if app.ignored {
-                                Button(action: { scanner.setIgnored(app, false) }) {
-                                    Label("取消忽略", systemImage: "eye")
-                                        .font(.subheadline).foregroundColor(accentColor)
-                                        .padding(.horizontal, 16).padding(.vertical, 9)
-                                        .background(accentColor.opacity(0.12)).cornerRadius(18)
-                                }.buttonStyle(PlainButtonStyle()).help("恢复提醒")
-                            }
-                            
-                            if let msg = app.upgradeMessage {
-                                Text(msg).font(.subheadline)
-                                    .foregroundColor(
-                                        msg.contains("失败") || msg.contains("错误") ? .red :
-                                        (msg.contains("⚠️") || msg.contains("手动") || msg.contains("取消") ? .orange : .green)
-                                    )
-                            }
                         }.padding(.top, 4)
+                        
+                        if let msg = app.upgradeMessage {
+                            let isRedundantSuccess = app.upgraded && msg.contains("✅") && (app.category == .git || app.category == .node || (app.category == .other && app.sourceKind == .cliTool))
+                            if !isRedundantSuccess {
+                                Text(msg)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(msg.contains("✅") ? .green : .red)
+                                    .padding(.top, 4)
+                            }
+                        }
                     }
                     Spacer()
                 }
@@ -620,8 +863,8 @@ struct AppDetailView: View {
                         Text("正在加载项目说明…").font(.subheadline).foregroundColor(.gray)
                     }.padding(.vertical, 8)
                 }
-                // Git 项目：预览放在「项目说明」上面
-                if app.category == .git && !app.screenshotUrls.isEmpty {
+                // 统一预览大图显示：无论渠道，只要有预览图，都统一排列在说明/项目说明之上，保持风格一致
+                if !app.screenshotUrls.isEmpty {
                     VStack(alignment: .leading, spacing: 16) {
                         Text("预览").font(.title2).bold()
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -641,20 +884,7 @@ struct AppDetailView: View {
                             if let date = app.releaseDate { Text(date).font(.subheadline).foregroundColor(.gray) }
                         }
                         if app.category != .node && app.category != .git, let latest = app.latestVersion { Text("版本 \(latest)").font(.subheadline).foregroundColor(.gray) }
-                        Text(notes).foregroundColor(.primary).fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                // 其它渠道（如 App Store）：预览在「新功能」之后
-                if app.category != .git && !app.screenshotUrls.isEmpty {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("预览").font(.title2).bold()
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 20) {
-                                ForEach(app.screenshotUrls, id: \.self) { surl in
-                                    ReadmeImageView(src: surl)
-                                }
-                            }
-                        }
+                        MarkdownRenderer(markdown: notes)
                     }
                 }
             }.padding(40)
@@ -663,8 +893,130 @@ struct AppDetailView: View {
         .onAppear {
             // 按需加载富信息（GitHub README / Release notes / 本地 README）
             if app.category == .node { scanner.fetchChangelog(for: app) }
-            if app.category == .brew { scanner.fetchBrewDetail(for: app) }
+            if app.category == .brew { scanner.fetchBrewDetail(for: app); scanner.refreshBrewServicesStatus() }
             if app.category == .git { scanner.fetchGitReadme(for: app); scanner.fetchGitStats(for: app) }
+        }
+        .sheet(isPresented: $showingForceUpdateSheet) {
+            VStack(alignment: .leading, spacing: 18) {
+                // Header Row
+                HStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.red.opacity(0.12))
+                            .frame(width: 44, height: 44)
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 22))
+                            .foregroundColor(.red)
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("强制更新确认")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(.primary)
+                        Text(app.bestName)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                // Warning Callout Card
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("⚠️ 高危操作警告")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.red)
+                    Text("强制更新将放弃本地所有修改（包括未提交的修改、暂存的改动和分叉提交），本地代码会被完全重置为远程仓库的状态。此操作不可撤销，请务必确认！")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .lineSpacing(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(14)
+                .background(Color.red.opacity(0.05))
+                .cornerRadius(10)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.red.opacity(0.12), lineWidth: 1)
+                )
+                
+                // Name Copy Panel
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("请复制或手动输入项目名称以确认：")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.primary)
+                    
+                    HStack {
+                        Text(app.bestName)
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundColor(.red)
+                            .textSelection(.enabled) // Native selectable and copyable text!
+                        
+                        Spacer()
+                        
+                        Button(action: {
+                            let pasteboard = NSPasteboard.general
+                            pasteboard.clearContents()
+                            pasteboard.setString(app.bestName, forType: .string)
+                        }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "doc.on.doc")
+                                Text("点击复制").font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundColor(accentColor)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(accentColor.opacity(0.12))
+                            .cornerRadius(6)
+                        }
+                        .buttonStyle(.plain)
+                        .help("复制项目名称")
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.gray.opacity(0.06))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.gray.opacity(0.15), lineWidth: 1)
+                    )
+                }
+                
+                // Text Field Input
+                TextField("在此粘贴或输入项目名称", text: $forceUpdateInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 13))
+                    .onSubmit {
+                        if forceUpdateInput == app.bestName {
+                            confirmForceUpdate()
+                        }
+                    }
+                
+                // Action Buttons Row
+                HStack(spacing: 12) {
+                    Spacer()
+                    
+                    Button("取消") {
+                        showingForceUpdateSheet = false
+                        forceUpdateInput = ""
+                    }
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut(.cancelAction)
+                    
+                    Button(action: confirmForceUpdate) {
+                        Text("确认强制更新")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(forceUpdateInput == app.bestName ? Color.red : Color.gray.opacity(0.3))
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(forceUpdateInput != app.bestName)
+                    .keyboardShortcut(.defaultAction)
+                }
+                .padding(.top, 4)
+            }
+            .padding(24)
+            .frame(width: 440)
         }
     }
     var fallbackIcon: some View {
@@ -695,11 +1047,12 @@ struct AppDetailView: View {
             }
             return items
         }
-        // Homebrew 包：展示版本/许可证/维护者
+        // Homebrew 包：展示版本/最新版本/发布日期/许可证/维护者，保持与 Node.js 风格完全一致
         if app.category == .brew {
             var items: [(String, String, String)] = []
             if let c = app.currentVersion { items.append((c, "当前版本", "number")) }
-            if let l = app.latestVersion, l != app.currentVersion { items.append((l, "最新版本", "arrow.up.circle")) }
+            if let l = app.latestVersion { items.append((l, "最新版本", "arrow.up.circle")) }
+            if let d = app.releaseDate { items.append((d, "发布日期", "calendar")) }
             if let lic = app.license { items.append((lic, "许可证", "doc.text")) }
             if let dev = app.developer, !dev.isEmpty { items.append((dev, "维护者", "person.crop.circle")) }
             return items
@@ -743,5 +1096,141 @@ struct AppDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 12)
+    }
+}
+
+// 智能 Markdown 说明渲染器：支持 H1, H2, H3 标题大小粗细变化、列表符号、代码块灰色圆角容器及行内样式解析
+struct MarkdownRenderer: View {
+    let markdown: String
+    
+    var body: some View {
+        let lines = markdown.components(separatedBy: .newlines)
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(parseBlocks(lines), id: \.id) { block in
+                renderBlock(block)
+            }
+        }
+    }
+    
+    enum BlockType {
+        case h1, h2, h3, paragraph, bullet, codeBlock(String)
+    }
+    
+    struct Block: Identifiable {
+        let id = UUID()
+        let type: BlockType
+        let text: String
+    }
+    
+    private func parseBlocks(_ lines: [String]) -> [Block] {
+        var blocks: [Block] = []
+        var inCodeBlock = false
+        var codeContent = ""
+        
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            
+            if trimmed.hasPrefix("```") {
+                if inCodeBlock {
+                    blocks.append(Block(type: .codeBlock(codeContent), text: ""))
+                    codeContent = ""
+                    inCodeBlock = false
+                } else {
+                    inCodeBlock = true
+                }
+                continue
+            }
+            
+            if inCodeBlock {
+                codeContent += line + "\n"
+                continue
+            }
+            
+            if trimmed.isEmpty {
+                continue
+            }
+            
+            if trimmed.hasPrefix("# ") {
+                blocks.append(Block(type: .h1, text: String(trimmed.dropFirst(2))))
+            } else if trimmed.hasPrefix("## ") {
+                blocks.append(Block(type: .h2, text: String(trimmed.dropFirst(3))))
+            } else if trimmed.hasPrefix("### ") {
+                blocks.append(Block(type: .h3, text: String(trimmed.dropFirst(4))))
+            } else if trimmed.hasPrefix("- ") {
+                blocks.append(Block(type: .bullet, text: String(trimmed.dropFirst(2))))
+            } else if trimmed.hasPrefix("* ") {
+                blocks.append(Block(type: .bullet, text: String(trimmed.dropFirst(2))))
+            } else {
+                blocks.append(Block(type: .paragraph, text: line))
+            }
+        }
+        
+        if inCodeBlock && !codeContent.isEmpty {
+            blocks.append(Block(type: .codeBlock(codeContent), text: ""))
+        }
+        
+        return blocks
+    }
+    
+    private func renderBlock(_ block: Block) -> some View {
+        Group {
+            switch block.type {
+            case .h1:
+                renderText(block.text)
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.primary)
+                    .padding(.top, 14)
+                    .padding(.bottom, 6)
+            case .h2:
+                renderText(block.text)
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundColor(.primary)
+                    .padding(.top, 12)
+                    .padding(.bottom, 4)
+            case .h3:
+                renderText(block.text)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(.primary)
+                    .padding(.top, 8)
+                    .padding(.bottom, 2)
+            case .bullet:
+                HStack(alignment: .top, spacing: 6) {
+                    Text("•")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.secondary)
+                        .padding(.top, 2)
+                    renderText(block.text)
+                        .font(.system(size: 13))
+                        .lineSpacing(4)
+                }
+                .padding(.leading, 8)
+            case .paragraph:
+                renderText(block.text)
+                    .font(.system(size: 13))
+                    .lineSpacing(4)
+                    .foregroundColor(.primary)
+            case .codeBlock(let code):
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(code.trimmingCharacters(in: .whitespacesAndNewlines))
+                        .font(.system(.subheadline, design: .monospaced))
+                        .foregroundColor(.primary)
+                        .padding(12)
+                }
+                .background(Color.gray.opacity(0.06))
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.gray.opacity(0.12), lineWidth: 1)
+                )
+                .padding(.vertical, 4)
+            }
+        }
+    }
+    
+    private func renderText(_ text: String) -> Text {
+        if let attrStr = try? AttributedString(markdown: text, options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+            return Text(attrStr)
+        }
+        return Text(text)
     }
 }

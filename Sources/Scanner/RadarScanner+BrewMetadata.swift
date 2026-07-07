@@ -13,7 +13,7 @@ extension RadarScanner {
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
             
             // 构建 name → metadata 映射
-            var metaMap: [String: (desc: String?, homepage: String?, version: String?, license: String?, displayName: String?)] = [:]
+            var metaMap: [String: (desc: String?, homepage: String?, version: String?, license: String?, gitRepoUrl: String?, displayName: String?)] = [:]
             
             if let formulae = obj["formulae"] as? [[String: Any]] {
                 for f in formulae {
@@ -22,8 +22,20 @@ extension RadarScanner {
                     let homepage = f["homepage"] as? String
                     let version = (f["versions"] as? [String: Any])?["stable"] as? String
                     let license = f["license"] as? String
+                    
+                    var gitRepo: String? = nil
+                    if let urls = f["urls"] as? [String: Any] {
+                        if let stable = urls["stable"] as? [String: Any],
+                           let u = stable["url"] as? String, u.contains("github.com/") {
+                            gitRepo = u
+                        } else if let head = urls["head"] as? [String: Any],
+                                  let u = head["url"] as? String, u.contains("github.com/") {
+                            gitRepo = u
+                        }
+                    }
+                    
                     // formula 是命令行工具，不拉图标（避免 71 个并发请求拖慢界面）
-                    metaMap[name] = (desc, homepage, version, license, nil)
+                    metaMap[name] = (desc, homepage, version, license, gitRepo, nil)
                 }
             }
             if let casks = obj["casks"] as? [[String: Any]] {
@@ -33,7 +45,7 @@ extension RadarScanner {
                     let homepage = c["homepage"] as? String
                     let version = c["version"] as? String
                     let displayName = (c["name"] as? [String])?.first
-                    metaMap[token] = (desc, homepage, version, nil, displayName)
+                    metaMap[token] = (desc, homepage, version, nil, nil, displayName)
                 }
             }
             
@@ -59,6 +71,14 @@ extension RadarScanner {
                             }
                         }
                     }
+                    if let gitRepo = meta.gitRepoUrl {
+                        app.gitRepoUrl = gitRepo
+                        // 若详情页在此之前已打开但因缺少 gitRepoUrl 提前返回，此处在拿到后重新触发异步详情加载
+                        if app.changelogNotes == nil && app.releaseNotes == nil {
+                            app.changelogLoaded = false
+                            self.fetchBrewDetail(for: app)
+                        }
+                    }
                     if let v = meta.version, app.currentVersion == nil {
                         app.currentVersion = v
                         if app.latestVersion == nil { app.latestVersion = v }
@@ -72,36 +92,62 @@ extension RadarScanner {
     // 详情页按需加载：从 GitHub 拉 README（功能说明）+ Releases（更新日志），并翻译成中文。
     func fetchBrewDetail(for app: RadarUpdateApp) {
         guard app.category == .brew, !app.changelogLoaded else { return }
+        
+        var githubPath: String? = nil
+        if let hp = app.homepage?.absoluteString, hp.contains("github.com/") {
+            githubPath = hp
+        } else if let gr = app.gitRepoUrl, gr.contains("github.com/") {
+            githubPath = gr
+        }
+        
+        guard let path = githubPath else { return }
         app.changelogLoaded = true
-        guard let hp = app.homepage?.absoluteString, hp.contains("github.com/") else { return }
-        let parts = hp.components(separatedBy: "github.com/")
+        let parts = path.components(separatedBy: "github.com/")
         guard parts.count >= 2 else { return }
         let comps = parts[1].split(separator: "/")
         guard comps.count >= 2 else { return }
         let owner = String(comps[0])
         let repo = String(comps[1]).replacingOccurrences(of: ".git", with: "")
         
-        // 翻译已有的简短描述
-        if let desc = app.descriptionText, !desc.isEmpty {
-            Translator.toZh(desc) { zh in DispatchQueue.main.async { app.descriptionText = zh } }
+        DispatchQueue.main.async {
+            if app.developer == nil || app.developer?.isEmpty == true {
+                app.developer = owner
+            }
         }
-        // README → 功能说明
+        
+        // 不使用翻译器，直接使用原始的简短描述（避免硬翻译导致命令行命令或项目名面目全非）
+        
+        // README → 功能说明与图片预览提取
         if let url = URL(string: "https://raw.githubusercontent.com/\(owner)/\(repo)/HEAD/README.md") {
             URLSession.shared.dataTask(with: url) { data, resp, _ in
                 guard let data = data, let http = resp as? HTTPURLResponse, http.statusCode == 200,
                       let md = String(data: data, encoding: .utf8), !md.isEmpty else { return }
                 let excerpt = RadarScanner.readmeExcerpt(md)
-                Translator.toZh(excerpt) { zh in DispatchQueue.main.async { app.releaseNotes = zh } }
+                let rawBaseUrl = "https://raw.githubusercontent.com/\(owner)/\(repo)/HEAD"
+                let imgs = RadarScanner.extractReadmeImages(md, repoPath: rawBaseUrl, fileSubdir: "")
+                DispatchQueue.main.async {
+                    app.releaseNotes = excerpt
+                    app.screenshotUrls = imgs
+                }
             }.resume()
         }
-        // Releases → 更新日志
+        // Releases → 更新日志与发布日期
         if let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases/latest") {
             URLSession.shared.dataTask(with: url) { data, resp, _ in
                 guard let data = data, let http = resp as? HTTPURLResponse, http.statusCode == 200,
-                      let rel = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let body = rel["body"] as? String, !body.isEmpty else { return }
-                let cleaned = RadarScanner.cleanReleaseBody(body)
-                Translator.toZh(cleaned) { zh in DispatchQueue.main.async { app.changelogNotes = zh } }
+                      let rel = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+                let body = rel["body"] as? String ?? ""
+                let cleaned = body.isEmpty ? "" : RadarScanner.cleanReleaseBody(body)
+                let publishedAt = rel["published_at"] as? String
+                
+                DispatchQueue.main.async {
+                    if !cleaned.isEmpty {
+                        app.changelogNotes = cleaned
+                    }
+                    if let pub = publishedAt, pub.count >= 10 {
+                        app.releaseDate = String(pub.prefix(10))
+                    }
+                }
             }.resume()
         }
     }

@@ -65,7 +65,7 @@ struct DockerContainer: Identifiable, Equatable {
     let image: String
     let status: String
     let ports: String
-    let cpu: String
+    var cpu: String
     var mem: String = "-"
     var imageUpdatable: Bool = false   // 镜像有新版本（本地 digest 与远程不一致）
     var isPullingImage: Bool = false   // 正在 docker pull 更新镜像

@@ -52,6 +52,26 @@ extension RadarScanner {
                 }
             }
             
+            // Get listening ports per PID
+            var pidPorts: [Int: Int] = [:]
+            let lsofOutput = ProcessRunner.runCommand("lsof -nP -iTCP -sTCP:LISTEN")
+            for line in lsofOutput.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("COMMAND") { continue }
+                let parts = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+                if parts.count >= 9, let pid = Int(parts[1]) {
+                    let nameField = parts[8]
+                    if let colonIdx = nameField.lastIndex(of: ":") {
+                        let portStr = nameField[nameField.index(after: colonIdx)...]
+                        if let portVal = Int(portStr) {
+                            if pidPorts[pid] == nil || portVal < pidPorts[pid]! {
+                                pidPorts[pid] = portVal
+                            }
+                        }
+                    }
+                }
+            }
+            
             // Build brew cask set for source detection.
             // brew 启动开销大，缓存后每 ~60s 才刷新一次，避免拖慢每次（含首屏）进程扫描。
             let brewCaskList: Set<String>
@@ -128,7 +148,7 @@ extension RadarScanner {
                         else if comm.lowercased().contains("mysql") || comm.lowercased().contains("redis")
                                     || comm.lowercased().contains("nginx") { tag = .brew }
                         
-                        scannedProcs.append(SysProcess(id: pid, name: localizedName, cpu: cpu, memKB: memKB, user: user, cpuTime: cpuTime, threads: threads, ports: 0, tag: tag, iconImage: icon))
+                        scannedProcs.append(SysProcess(id: pid, name: localizedName, cpu: cpu, memKB: memKB, user: user, cpuTime: cpuTime, threads: threads, ports: pidPorts[pid] ?? 0, tag: tag, iconImage: icon))
                     }
                 }
             }
@@ -145,13 +165,54 @@ extension RadarScanner {
             }
             
             // Parse docker output (running containers shown as pseudo-processes)
-            let dockerOutput = ProcessRunner.runCommand("docker ps --format '{{.Names}}\t{{.Status}}'")
+            let dockerOutput = ProcessRunner.runCommand("docker ps --format '{{.Names}}\t{{.Status}}\t{{.Ports}}'")
             var dockerPidCounter = 900000
             for line in dockerOutput.components(separatedBy: .newlines) where !line.isEmpty {
                 let parts = line.components(separatedBy: "\t")
                 if parts.count >= 2 && parts[1].contains("Up") {
-                    scannedProcs.append(SysProcess(id: dockerPidCounter, name: parts[0], cpu: 0.1, memKB: 512000.0, user: "docker_daemon", cpuTime: "0:00.00", threads: 1, ports: 0, tag: .docker, iconImage: nil))
+                    var containerPort = 0
+                    if parts.count >= 3 {
+                        let portStr = parts[2]
+                        let mappings = portStr.components(separatedBy: ",")
+                        if let firstMapping = mappings.first {
+                            if let colonIdx = firstMapping.lastIndex(of: ":"),
+                               let arrowIdx = firstMapping.range(of: "->") {
+                                let afterColon = firstMapping.index(after: colonIdx)
+                                if afterColon <= arrowIdx.lowerBound {
+                                    let portSubstring = firstMapping[afterColon..<arrowIdx.lowerBound]
+                                    if let pVal = Int(portSubstring) {
+                                        containerPort = pVal
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    scannedProcs.append(SysProcess(id: dockerPidCounter, name: parts[0], cpu: 0.1, memKB: 512000.0, user: "docker_daemon", cpuTime: "0:00.00", threads: 1, ports: containerPort, tag: .docker, iconImage: nil))
                     dockerPidCounter += 1
+                }
+            }
+            
+            // === Phase 1（极速首屏）：先跑一次 docker ps -a 获取容器列表，立即推送 UI ===
+            // 不等 docker stats / docker info / Registry digest 等慢命令，
+            // 用户在 ~1 秒内就能看到容器表格（CPU/内存暂显 "0%" / "-"），
+            // Phase 2 的完整数据到达后会自动刷新。
+            var earlyContainers: [DockerContainer] = []
+            let earlyListOutput = ProcessRunner.runCommand("docker ps -a --format '{{.ID}},,,{{.Names}},,,{{.Image}},,,{{.Status}},,,{{.Ports}}'")
+            for line in earlyListOutput.components(separatedBy: .newlines) where !line.isEmpty {
+                let parts = line.components(separatedBy: ",,,")
+                if parts.count >= 4 {
+                    earlyContainers.append(DockerContainer(
+                        id: parts[0], name: parts[1], image: parts[2],
+                        status: parts[3], ports: parts.count >= 5 ? parts[4] : "",
+                        cpu: "0%", mem: "-"
+                    ))
+                }
+            }
+            if !earlyContainers.isEmpty || !dockerOutput.isEmpty {
+                // 有 Docker 环境（即使当前无容器也是正常状态），立即关闭加载态
+                DispatchQueue.main.async {
+                    self.live.dockerContainers = earlyContainers
+                    self.live.isDockerFirstLoad = false
                 }
             }
             
@@ -194,9 +255,9 @@ extension RadarScanner {
                 return "0 B"
             }
             
-            // === Docker 静态信息（版本/引擎配置/VM 磁盘）：仅首次或每 ~60s 刷新 ===
-            // 这些查询里 `docker run --rm alpine df` 会启动一个容器，开销极大，
-            // 过去每 5 秒执行一次，是 CPU 飙升的主要元凶之一。
+            // === Phase 2（后台增量填充）：慢命令依次执行，完成后二次推送带完整数据的容器列表 ===
+            
+            // Docker 静态信息（版本/引擎配置/VM 磁盘）：仅首次或每 ~60s 刷新
             if refreshDockerStatic {
                 let dockerInfoOut = ProcessRunner.runCommand("docker info --format '{{.NCPU}},,,{{.MemTotal}},,,{{.ServerVersion}}'")
                 let infoParts = dockerInfoOut.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: ",,,")
@@ -229,7 +290,7 @@ extension RadarScanner {
                 self.dockerStaticInfoLoaded = true
             }
             
-            // === Docker 实时统计（每个周期都刷新，保证容器 CPU/内存是最新的）===
+            // Docker 实时统计（每个周期都刷新，保证容器 CPU/内存是最新的）
             let dockerStatsOutput = ProcessRunner.runCommand("docker stats --no-stream --format '{{.Name}},,,{{.CPUPerc}},,,{{.MemUsage}}'")
             var dockerCpuMap: [String: String] = [:]
             var dockerMemMap: [String: String] = [:]
@@ -270,26 +331,17 @@ extension RadarScanner {
                 }
             }
             
-            // 容器列表（用于 Docker 标签页表格）
+            // 用 Phase 2 的完整 stats 数据重建容器列表
             var scannedContainers: [DockerContainer] = []
-            let dockerListOutput = ProcessRunner.runCommand("docker ps -a --format '{{.ID}},,,{{.Names}},,,{{.Image}},,,{{.Status}},,,{{.Ports}}'")
-            for line in dockerListOutput.components(separatedBy: .newlines) where !line.isEmpty {
-                let parts = line.components(separatedBy: ",,,")
-                if parts.count >= 4 {
-                    let cid = parts[0]
-                    let name = parts[1]
-                    let img = parts[2]
-                    let status = parts[3]
-                    let ports = parts.count >= 5 ? parts[4] : ""
-                    let cpu = dockerCpuMap[name] ?? "0%"
-                    let mem = dockerMemMap[name] ?? "-"
-                    scannedContainers.append(DockerContainer(id: cid, name: name, image: img, status: status, ports: ports, cpu: cpu, mem: mem))
-                }
+            // 复用 Phase 1 已拿到的容器基本信息，填充 CPU/内存
+            for c in earlyContainers {
+                var updated = c
+                updated.cpu = dockerCpuMap[c.name] ?? "0%"
+                updated.mem = dockerMemMap[c.name] ?? "-"
+                scannedContainers.append(updated)
             }
             
             // === 镜像更新检测（每 ~60s）：本地 RepoDigest 与远程 Registry API digest 比对 ===
-            // 使用 Docker Hub Registry v2 API 查远程 digest（比 buildx imagetools 更稳定）。
-            // 网络操作较重，故跟随 docker 静态信息节奏降频；其余周期复用缓存。
             var imageUpdatable = self.cachedImageUpdatable
             if refreshDockerStatic {
                 let images = Set(scannedContainers.map { $0.image })
@@ -304,19 +356,15 @@ extension RadarScanner {
                         let q = self.shellQuote(img)
                         let local = ProcessRunner.runCommand("docker image inspect \(q) --format '{{index .RepoDigests 0}}' 2>/dev/null")
                             .components(separatedBy: "@").last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                        // 解析 image 为 repo:tag（处理带/不带 tag 的情况）
                         let parts = img.split(separator: ":", maxSplits: 1).map(String.init)
                         let repo = parts[0]
                         let tag = parts.count > 1 ? parts[1] : "latest"
-                        // 跳过本地构建（无 registry）的镜像
                         if !repo.contains("/") && !repo.contains(".") { fresh[img] = false; return }
-                        // Docker Hub Registry v2 API：先获取 token，再查 manifest digest
                         let tokenJson = ProcessRunner.runCommand("curl -s --max-time 10 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:\(repo):pull'")
                         guard let tData = tokenJson.data(using: .utf8),
                               let tObj = try? JSONSerialization.jsonObject(with: tData) as? [String: Any],
                               let token = tObj["token"] as? String else { fresh[img] = false; return }
                         let header = ProcessRunner.runCommand("curl -s --max-time 10 -I -H 'Authorization: Bearer \(token)' -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' 'https://registry-1.docker.io/v2/\(repo)/manifests/\(tag)' 2>/dev/null")
-                        // 从 response headers 提取 docker-content-digest
                         var remote = ""
                         for line in header.components(separatedBy: .newlines) {
                             if line.lowercased().hasPrefix("docker-content-digest:") {
@@ -334,7 +382,6 @@ extension RadarScanner {
             for i in scannedContainers.indices {
                 let img = scannedContainers[i].image
                 scannedContainers[i].imageUpdatable = imageUpdatable[img] ?? false
-                // 保留"拉取中"状态，避免被周期扫描冲掉
                 if self.imagesPulling.contains(img) {
                     scannedContainers[i].isPullingImage = true
                     scannedContainers[i].imageUpdatable = false
@@ -354,6 +401,7 @@ extension RadarScanner {
                 self.live.processes = scannedProcs
                 self.lastDockerProcs = scannedProcs.filter { $0.tag == .docker }
                 self.live.dockerContainers = scannedContainers
+                self.live.isDockerFirstLoad = false   // Docker 数据已首次到达，关闭加载态
                 self.cachedImageUpdatable = imageUpdatable
                 
                 self.live.dockerDesktopVersion = self.cachedDockerDesktopVer
@@ -393,6 +441,9 @@ extension RadarScanner {
                 self.live.diskWriteBytes = disk.write
                 
                 self.live.isScanningProcesses = false
+                
+                self.refreshNodeServiceStatus()
+                self.refreshGitProjectStatus()
             }
         }
     }
