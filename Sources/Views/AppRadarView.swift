@@ -170,7 +170,30 @@ struct MenuBarContentView: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let cpuVal = live.cpuUser + live.cpuSys
+        let cpuColor: Color = {
+            if cpuVal < 65.0 {
+                return .green
+            } else if cpuVal < 85.0 {
+                return .orange
+            } else {
+                return .red
+            }
+        }()
+        
+        let usedMem = live.appMem + live.wiredMem + live.compressedMem
+        let memRatio = live.physicalMem > 0 ? (usedMem / live.physicalMem) : 0.0
+        let memColor: Color = {
+            if memRatio < 0.75 {
+                return .green
+            } else if memRatio < 0.90 {
+                return .orange
+            } else {
+                return .red
+            }
+        }()
+        
+        return VStack(alignment: .leading, spacing: 12) {
             // 头部栏：真实 App 标识
             HStack(spacing: 8) {
                 if let path = Bundle.main.path(forResource: "logo", ofType: "png"),
@@ -233,9 +256,9 @@ struct MenuBarContentView: View {
                         // CPU
                         VStack(alignment: .leading, spacing: 2) {
                             Text("CPU 占用").font(.system(size: 9)).foregroundColor(.secondary)
-                            Text(String(format: "%.1f%%", min(100, live.cpuUser + live.cpuSys)))
+                            Text(String(format: "%.1f%%", min(100, cpuVal)))
                                 .font(.system(size: 13, weight: .bold))
-                                .foregroundColor(accentColor)
+                                .foregroundColor(cpuColor)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         
@@ -244,9 +267,9 @@ struct MenuBarContentView: View {
                         // 内存
                         VStack(alignment: .leading, spacing: 2) {
                             Text("已用内存").font(.system(size: 9)).foregroundColor(.secondary)
-                            Text(scanner.formatMemoryGB(live.appMem + live.wiredMem + live.compressedMem))
+                            Text(scanner.formatMemoryGB(usedMem))
                                 .font(.system(size: 13, weight: .bold))
-                                .foregroundColor(.primary)
+                                .foregroundColor(memColor)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         
