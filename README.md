@@ -98,7 +98,11 @@ AppRadar-Live 桌面端在运行时会调用以下命令行工具获取数据，
 
 ### ⚠️ 首次打开提示"无法验证开发者"的解决方法
 
-由于本应用未上架 App Store，macOS Gatekeeper 会阻止首次打开。请使用以下任一方式解决（仅需操作一次）：
+由于本应用未上架 App Store，macOS Gatekeeper 会阻止首次打开，您可能会看到如下提示：
+
+![Gatekeeper 安全提示](screenshots/gatekeeper_warning.png)
+
+请使用以下任一方式解决（仅需操作一次）：
 
 **方式一：右键打开**
 1. 在 Finder 中找到 `app-radar-live.app`
