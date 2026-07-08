@@ -146,12 +146,22 @@ extension RadarScanner {
                 uniqueRepos.append(canonical)
             }
         }
-        // 再并行检查每个仓库的 origin 是否指向 github（git remote 为本地操作，并行后几乎瞬时）
+        // 再检查每个仓库的 origin 是否指向 github（git remote 为本地操作，限并发 8 个避免线程爆炸）
         var isGithub = [Bool](repeating: false, count: uniqueRepos.count)
-        DispatchQueue.concurrentPerform(iterations: uniqueRepos.count) { i in
-            let url = ProcessRunner.runCommand("git -C \(self.shellQuote(uniqueRepos[i])) remote get-url origin 2>/dev/null")
-            isGithub[i] = url.lowercased().contains("github.com")
+        let checkSem = DispatchSemaphore(value: 8)
+        let checkGroup = DispatchGroup()
+        let checkQueue = DispatchQueue(label: "git.origin-check", attributes: .concurrent)
+        for i in uniqueRepos.indices {
+            checkSem.wait()
+            checkGroup.enter()
+            checkQueue.async {
+                let url = ProcessRunner.runCommand("git -C \(self.shellQuote(uniqueRepos[i])) remote get-url origin 2>/dev/null")
+                isGithub[i] = url.lowercased().contains("github.com")
+                checkSem.signal()
+                checkGroup.leave()
+            }
         }
+        checkGroup.wait()
         let githubRepos = zip(uniqueRepos, isGithub).filter { $0.1 }.map { $0.0 }
         return githubRepos
     }
@@ -228,12 +238,17 @@ extension RadarScanner {
         DispatchQueue.main.async { app.isUpgrading = true; app.upgradeMessage = "拉取中…" }
         DispatchQueue.global(qos: .userInitiated).async {
             let q = self.shellQuote(path)
+            let outputLock = NSLock()
             var fullOutput = ""
             let code = ProcessRunner.runCommandStreaming("git -C \(q) pull --ff-only 2>&1") { line in
+                outputLock.lock()
                 fullOutput += line + "\n"
+                outputLock.unlock()
                 DispatchQueue.main.async { app.upgradeMessage = String(line.prefix(40)) }
             }
+            outputLock.lock()
             let lower = fullOutput.lowercased()
+            outputLock.unlock()
             // ff-only 失败（本地有分叉/改动）→ 给出清晰且易懂的中文解释
             let diverged = lower.contains("not possible to fast-forward") || lower.contains("diverg")
             let localChanges = lower.contains("would be overwritten") || lower.contains("local changes") || lower.contains("unstaged")

@@ -99,17 +99,21 @@ struct ProcessRunner {
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         
         let handle = pipe.fileHandleForReading
+        // 用串行队列保护 strBuffer 的读写，消除 readabilityHandler 回调的数据竞争
+        let bufferQueue = DispatchQueue(label: "com.appradar.streaming-buffer")
         var strBuffer = ""
         handle.readabilityHandler = { fh in
             let data = fh.availableData
             guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
-            strBuffer += chunk
-            let parts = strBuffer.components(separatedBy: CharacterSet(charactersIn: "\n\r"))
-            for line in parts.dropLast() {
-                let t = line.trimmingCharacters(in: .whitespaces)
-                if !t.isEmpty { onLine(t) }
+            bufferQueue.sync {
+                strBuffer += chunk
+                let parts = strBuffer.components(separatedBy: CharacterSet(charactersIn: "\n\r"))
+                for line in parts.dropLast() {
+                    let t = line.trimmingCharacters(in: .whitespaces)
+                    if !t.isEmpty { onLine(t) }
+                }
+                strBuffer = parts.last ?? ""
             }
-            strBuffer = parts.last ?? ""
         }
         
         do {
@@ -124,8 +128,11 @@ struct ProcessRunner {
             return -1
         }
         handle.readabilityHandler = nil
-        let tail = strBuffer.trimmingCharacters(in: .whitespaces)
-        if !tail.isEmpty { onLine(tail) }
+        // 处理缓冲区中剩余内容
+        bufferQueue.sync {
+            let tail = strBuffer.trimmingCharacters(in: .whitespaces)
+            if !tail.isEmpty { onLine(tail) }
+        }
         return process.terminationStatus
     }
 }
