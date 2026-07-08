@@ -5,6 +5,7 @@ import UserNotifications
 // MARK: - Main View
 struct AppRadarView: View {
     @ObservedObject var scanner: RadarScanner
+    @ObservedObject private var updater = AppUpdater.shared
     @AppStorage("themeColorHex") private var themeColorHex: String = "#8B5CF6"
     var currentAccent: Color { Color(hex: themeColorHex) }
     
@@ -69,7 +70,7 @@ struct AppRadarView: View {
                 } else if scanner.selectedSidebarItem == .updateAll {
                     UpdateCenterView(scanner: scanner, accentColor: currentAccent)
                 } else if scanner.selectedSidebarItem == .sysSettings {
-                    SettingsView(themeColorHex: $themeColorHex, accentColor: currentAccent)
+                    SettingsView(themeColorHex: $themeColorHex, accentColor: currentAccent, updater: updater)
                 } else {
                     Text("请选择左侧菜单")
                 }
@@ -78,6 +79,9 @@ struct AppRadarView: View {
         .frame(minWidth: 1100, minHeight: 700)
         .tint(currentAccent)
         .onAppear { scanner.startAutoRefresh() }
+        .sheet(isPresented: $updater.showUpdateSheet) {
+            UpdateAvailableSheet(updater: updater, accentColor: currentAccent)
+        }
     }
 }
 
@@ -130,6 +134,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         
         // 4) 请求通知权限，用于推送版本更新和 CPU/内存资源异常报警
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        
+        // 5) 应用已保存的偏好设置
+        let defaults = UserDefaults.standard
+        // 5.1 Dock 图标显隐
+        SystemPreferences.applyDockIconVisibility(hidden: defaults.bool(forKey: "hideDockIcon"))
+        // 5.2 开机自启动：首次运行（未设置过）时默认开启一次
+        if defaults.object(forKey: "launchAtLogin") == nil {
+            SystemPreferences.setLaunchAtLogin(true)
+            defaults.set(true, forKey: "launchAtLogin")
+        }
+        
+        // 6) 启动后检查自身版本更新（延迟 2s，避开启动高峰）
+        //    autoCheckUpdate 默认开启；开启时若发现新版本，直接后台静默下载安装
+        let autoUpdate = defaults.object(forKey: "autoCheckUpdate") == nil ? true : defaults.bool(forKey: "autoCheckUpdate")
+        if autoUpdate {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                AppUpdater.shared.checkForUpdates(silent: true, autoInstall: true)
+            }
+        }
     }
     
     @objc private func togglePopover(_ sender: Any?) {
