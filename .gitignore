@@ -5,6 +5,7 @@
 *.app/
 app-radar-live.app/
 release/
+_icon_base.png
 
 # Python
 __pycache__/
@@ -13,6 +14,9 @@ venv/
 
 # User config (use config.example.json as template)
 config.json
+
+# App auto-update signing private key (NEVER commit)
+update_private_key.pem
 
 # Kiro IDE local config
 .kiro/

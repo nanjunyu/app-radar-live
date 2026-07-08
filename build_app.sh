@@ -23,6 +23,11 @@ swiftc ${SWIFT_SOURCES} -parse-as-library -o "${MACOS_DIR}/app-radar-live" -targ
 # Copy Info.plist
 cp Info.plist "${CONTENTS_DIR}/"
 
+# Bundle CHANGELOG.md (更新记录数据源，App 内离线读取)
+if [ -f "CHANGELOG.md" ]; then
+    cp CHANGELOG.md "${CONTENTS_DIR}/Resources/CHANGELOG.md"
+fi
+
 # Generate app icon (.icns) from logo.png for the Dock / Finder
 echo "🎨 Generating app icon from logo.png..."
 if [ -f "logo.png" ]; then
