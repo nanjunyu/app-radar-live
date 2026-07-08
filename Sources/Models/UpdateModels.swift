@@ -83,6 +83,7 @@ class RadarUpdateApp: Identifiable, ObservableObject, Hashable {
     @Published var isBrewService = false        // 是否是 Homebrew 后台服务（支持启停）
     var serviceBins: [String] = []            // 该包的真实可执行命令名（读自 package.json bin）
     var runningPids: [Int] = []               // 检测到的运行中进程 pid（用于停止）
+    var detectedStartCmd: String?             // 上次运行时记录的启动命令（用于下次重启）
     var isCask = false                        // Homebrew cask（GUI 应用，可"打开"）；formula 为 CLI 无 GUI
     
     init(name: String, category: UpdateCategory) {

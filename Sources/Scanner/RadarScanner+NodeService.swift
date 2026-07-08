@@ -86,8 +86,13 @@ extension RadarScanner {
                 var allPids = Set(rootPids)
                 for pid in rootPids { allPids.formUnion(self.descendantPids(of: pid)) }
                 // 在父进程及其后代里找监听端口
-                var port: Int? = nil
-                for pid in allPids { if let p = pidToPort[pid] { port = p; break } }
+                var ports: [Int] = []
+                for pid in allPids {
+                    if let p = pidToPort[pid] {
+                        ports.append(p)
+                    }
+                }
+                let port = self.selectBestConsolePort(from: ports)
                 let running = !allPids.isEmpty
                 let pidsArr = Array(allPids)
                 DispatchQueue.main.async {
@@ -158,7 +163,10 @@ extension RadarScanner {
     
     // 打开服务 Web UI（浏览器）
     func openNodeServiceUI(_ app: RadarUpdateApp) {
-        guard let port = app.servicePort, let url = URL(string: "http://localhost:\(port)") else { return }
-        NSWorkspace.shared.open(url)
+        guard let port = app.servicePort else { return }
+        let suffix = self.webPathSuffix(for: app)
+        if let url = URL(string: "http://localhost:\(port)\(suffix)") {
+            NSWorkspace.shared.open(url)
+        }
     }
 }

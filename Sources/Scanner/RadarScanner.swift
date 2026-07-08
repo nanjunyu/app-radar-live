@@ -89,6 +89,7 @@ class RadarScanner: ObservableObject {
     // 正在 docker pull 的镜像集合：让 5s 周期扫描重建容器列表时保留"拉取中"状态，不被冲掉。
     var imagesPulling: Set<String> = []
     
+
     init() {
         // Don't scan in init - let the view trigger it via onAppear
     }
@@ -126,6 +127,40 @@ class RadarScanner: ObservableObject {
                 self.hasNpm = npm
                 self.hasGit = git
             }
+        }
+    }
+
+    // 获取应用程序对应的 Web 访问子路径/后缀
+    func webPathSuffix(for app: RadarUpdateApp) -> String {
+        let name = app.name.lowercased()
+        if name.contains("cliproxyapi") {
+            return "/management.html"
+        }
+        if name.contains("kiro") {
+            return "/admin"
+        }
+        if app.category == .git, let localPath = app.localPath {
+            let fm = FileManager.default
+            if !fm.fileExists(atPath: localPath + "/index.html") && fm.fileExists(atPath: localPath + "/management.html") {
+                return "/management.html"
+            }
+        }
+        return ""
+    }
+
+    // 从一组端口中挑选最可能是控制台/服务网页的端口（排除 Vite 热更新端口 5173-5176 和 Chrome 调试端口 9222/9229 等）
+    func selectBestConsolePort(from ports: [Int]) -> Int? {
+        guard !ports.isEmpty else { return nil }
+        let filtered = ports.filter { $0 != 9222 && $0 != 9229 }
+        if filtered.isEmpty { return ports.first }
+        
+        let vitePorts = filtered.filter { $0 >= 5173 && $0 <= 5176 }
+        let nonVitePorts = filtered.filter { !vitePorts.contains($0) }
+        
+        if !nonVitePorts.isEmpty {
+            return nonVitePorts.min()
+        } else {
+            return vitePorts.min()
         }
     }
 }

@@ -92,6 +92,8 @@ extension RadarScanner {
                 self.lastNotifiedUpdates = currentPending
                 // 刷新 Node 包运行状态（启停按钮）
                 self.refreshNodeServiceStatus()
+                // 刷新 Homebrew 服务运行状态（启停按钮与端口）
+                self.refreshBrewServicesStatus()
                 // 异步回填 Homebrew 元数据（~2s，不阻塞 UI）
                 self.fetchBrewMetadata(for: allBrewApps)
             }

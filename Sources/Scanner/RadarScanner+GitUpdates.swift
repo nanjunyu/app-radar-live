@@ -3,6 +3,19 @@ import AppKit
 import Foundation
 
 extension RadarScanner {
+    // 保存和加载启动命令的持久化方法
+    private static let gitStartCmdPrefix = "git_start_cmd_"
+
+    private func loadGitStartCmd(forLocalPath path: String) -> String? {
+        let key = Self.gitStartCmdPrefix + path
+        return UserDefaults.standard.string(forKey: key)
+    }
+
+    private func saveGitStartCmd(forLocalPath path: String, cmd: String) {
+        let key = Self.gitStartCmdPrefix + path
+        UserDefaults.standard.set(cmd, forKey: key)
+    }
+
     // 扫描本机 GitHub 仓库：发现 → 仅保留 origin 为 github.com → fetch 对比是否落后。
     // 落后的进「待更新」，其余进「已安装」。仅在启动/手动刷新时执行（涉及网络，较慢）。
     func scanGitProjects() {
@@ -24,6 +37,7 @@ extension RadarScanner {
                 let app = RadarUpdateApp(name: (path as NSString).lastPathComponent, category: .git)
                 app.localPath = path
                 app.upgraded = true
+                app.detectedStartCmd = self.loadGitStartCmd(forLocalPath: path)
                 return app
             }
             DispatchQueue.main.async {
@@ -66,6 +80,9 @@ extension RadarScanner {
                 self.isScanningGit = false
                 self.restoreIgnoreState()
                 self.refreshDockBadge()
+                
+                // 加载完成立即刷新运行状态与端口
+                self.refreshGitProjectStatus()
             }
             
             // 第三阶段：受控并发拉取 star/fork（未认证 API 限 60/小时，限并发 4 避免触发滥用检测）
@@ -177,6 +194,7 @@ extension RadarScanner {
         
         let app = RadarUpdateApp(name: name, category: .git)
         app.localPath = path
+        app.detectedStartCmd = self.loadGitStartCmd(forLocalPath: path)
         app.developer = owner.isEmpty ? branch : owner
         app.currentVersion = localSha.isEmpty ? nil : localSha
         app.latestVersion = remoteSha.isEmpty ? localSha : remoteSha
@@ -473,25 +491,24 @@ extension RadarScanner {
     }
     
     // 刷新所有 Git 项目的运行状态和端口
+    // 逻辑核心：只有在项目目录内监听 TCP 端口的进程，才视为「运行中」。
+    // 同时记录该进程的完整命令行，下次启动时可复用。
     func refreshGitProjectStatus() {
         DispatchQueue.global(qos: .utility).async {
-            // Get CWD of all running processes: PID -> CWD
+            // Step 1: 获取所有进程的 CWD
             var pidToCwd: [Int: String] = [:]
             let lsofCwdOut = ProcessRunner.runCommand("lsof -a -d cwd -Fn 2>/dev/null")
             var currentPid = 0
             for line in lsofCwdOut.components(separatedBy: .newlines) {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 if trimmed.hasPrefix("p") {
-                    if let pidVal = Int(trimmed.dropFirst()) {
-                        currentPid = pidVal
-                    }
+                    if let pidVal = Int(trimmed.dropFirst()) { currentPid = pidVal }
                 } else if trimmed.hasPrefix("n") && currentPid != 0 {
-                    let cwdPath = String(trimmed.dropFirst())
-                    pidToCwd[currentPid] = cwdPath
+                    pidToCwd[currentPid] = String(trimmed.dropFirst())
                 }
             }
-            
-            // Get listening ports per PID
+
+            // Step 2: 获取监听 TCP 端口的 PID → Port 映射
             let lsofPortOut = ProcessRunner.runCommand("lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null")
             var pidToPort: [Int: Int] = [:]
             for line in lsofPortOut.components(separatedBy: .newlines) {
@@ -501,65 +518,278 @@ extension RadarScanner {
                 if parts.count >= 9, let pid = Int(parts[1]) {
                     let addr = parts[8]
                     if let c = addr.lastIndex(of: ":"), let port = Int(addr[addr.index(after: c)...]) {
-                        pidToPort[pid] = port
+                        if pidToPort[pid] == nil || port < pidToPort[pid]! {
+                            pidToPort[pid] = port
+                        }
                     }
                 }
             }
-            
-            // Scan Git apps
+
+            // Step 3: 获取进程完整命令行（用于记录学到的启动命令）
+            var pidToArgs: [Int: String] = [:]
+            let psArgsOut = ProcessRunner.runCommand("ps -ax -o pid=,args=")
+            for line in psArgsOut.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty else { continue }
+                let parts = trimmed.components(separatedBy: .whitespaces)
+                guard parts.count >= 2, let pid = Int(parts[0]) else { continue }
+                // args 去掉 pid 开头
+                let args = parts[1...].joined(separator: " ")
+                pidToArgs[pid] = args
+            }
+
+            // Step 4: 对每个 Git 项目，匹配「有在监听端口的进程且其 CWD 在项目目录内」
             let gitApps = (self.installed + self.updates).filter { $0.category == .git }
             for app in gitApps {
                 guard let localPath = app.localPath else { continue }
                 let canonicalPath = URL(fileURLWithPath: localPath).resolvingSymlinksInPath().path
-                
+
                 var runningPids: [Int] = []
-                var port: Int? = nil
-                
-                for (pid, cwd) in pidToCwd {
+                var ports: [Int] = []
+                var capturedCmd: String? = nil
+
+                for (pid, p) in pidToPort {
+                    guard let cwd = pidToCwd[pid] else { continue }
                     let canonicalCwd = URL(fileURLWithPath: cwd).resolvingSymlinksInPath().path
-                    if canonicalCwd == canonicalPath || canonicalCwd.hasPrefix(canonicalPath + "/") {
-                        runningPids.append(pid)
-                        if let p = pidToPort[pid] {
-                            port = p
-                        }
+                    guard canonicalCwd == canonicalPath || canonicalCwd.hasPrefix(canonicalPath + "/") else { continue }
+                    runningPids.append(pid)
+                    ports.append(p)
+                    // 记录启动命令：去掉原始可执行文件路径，保留参数部分即可全局复用
+                    if capturedCmd == nil, let args = pidToArgs[pid] {
+                        // 将命令行中的绝对路径换成相对命令，也可以直接保存原始形式
+                        capturedCmd = args
                     }
                 }
-                
+
+                let port = self.selectBestConsolePort(from: ports)
                 let isRunning = !runningPids.isEmpty
                 let pidsArr = runningPids
                 let finalPort = port
+                let finalCmd = capturedCmd
                 DispatchQueue.main.async {
                     app.runningPids = pidsArr
                     app.isRunning = isRunning
                     app.servicePort = finalPort
+                    if isRunning, let cmd = finalCmd {
+                        if app.detectedStartCmd != cmd {
+                            app.detectedStartCmd = cmd
+                            self.saveGitStartCmd(forLocalPath: localPath, cmd: cmd)
+                        }
+                    }
                 }
             }
         }
     }
-    
-    // 启动 Git 项目：打开 Terminal 并在对应目录下自动执行可能存在的启动脚本
+
+    // 显示 macOS 原生提示弹窗（确保在主线程执行）
+    private func showAlert(title: String, message: String) {
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = message
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "确定")
+            alert.runModal()
+        }
+    }
+
+    // 寻找闲置端口（避免 index.html 静态服务端口冲突）
+    private func findFreePort(startingFrom port: Int) -> Int {
+        var p = port
+        while p < 65535 {
+            let out = ProcessRunner.runCommand("lsof -iTCP:\(p) -sTCP:LISTEN 2>/dev/null")
+            if out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return p
+            }
+            p += 1
+        }
+        return port
+    }
+
+    // 后台静默启动 Git 项目（不弹出 Terminal）
+    // 逻辑：优先使用已记录的启动命令，如无记录则使用智能推断（如 .command、start.sh、package.json 等）。
+    // 若启动超时或失败，直接弹出原生 Alert，决不弹出终端窗口。
     func startGitProject(_ app: RadarUpdateApp) {
         guard app.category == .git, !app.isStartingOrStopping, let localPath = app.localPath else { return }
+        
+        let startupCmd = self.inferStartupCommand(for: localPath, learnedCmd: app.detectedStartCmd)
+        
+        guard !startupCmd.isEmpty else {
+            // 没有学习过且无法推断启动命令 → 直接展示友好弹窗，让小白用户能够看懂
+            self.showAlert(
+                title: "无法自动启动项目",
+                message: "该项目没有找到常见的启动文件或脚本，且尚未在本地成功运行过。\n\n提示：请先在终端中手动成功运行该服务一次，App 将会自动学习并记住其启动命令与端口。"
+            )
+            return
+        }
+
         DispatchQueue.main.async { app.isStartingOrStopping = true }
         DispatchQueue.global(qos: .userInitiated).async {
-            var startupCmd = ""
-            if FileManager.default.fileExists(atPath: localPath + "/kiro-go") {
-                startupCmd = "./kiro-go"
-            } else if FileManager.default.fileExists(atPath: localPath + "/package.json") {
-                startupCmd = "npm run dev"
-            } else if FileManager.default.fileExists(atPath: localPath + "/main.py") {
-                startupCmd = "python3 main.py"
-            } else if FileManager.default.fileExists(atPath: localPath + "/go.mod") {
-                startupCmd = "go run ."
+            // 处理脚本文件的执行权限问题 (如以防 `./script.sh` 或 `.command` 没有执行权限)
+            let parts = startupCmd.components(separatedBy: " ")
+            for part in parts {
+                if part.hasPrefix("./") && (part.hasSuffix(".sh") || part.hasSuffix(".command")) {
+                    let scriptName = String(part.dropFirst(2))
+                    _ = ProcessRunner.runCommand("chmod +x \(self.shellQuote(localPath + "/" + scriptName)) 2>/dev/null")
+                }
+            }
+
+            // 后台静默启动：Process + nohup，无终端弹窗
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            proc.arguments = ["-c", ProcessRunner.envPath + "nohup \(startupCmd) >/dev/null 2>&1 &"]
+            proc.currentDirectoryURL = URL(fileURLWithPath: localPath)
+            proc.standardOutput = FileHandle.nullDevice
+            proc.standardError = FileHandle.nullDevice
+
+            do {
+                try proc.run()
+                proc.waitUntilExit()   // 立即退出，由后台接管
+            } catch {
+                self.showAlert(title: "系统错误", message: "启动进程失败，请检查项目路径或权限是否正确。")
+                DispatchQueue.main.async { app.isStartingOrStopping = false }
+                return
+            }
+
+            // 动态等待服务启动并绑定端口（每 1 秒检测一次，最多等待 15 秒）
+            var startSuccess = false
+            for _ in 0..<15 {
+                Thread.sleep(forTimeInterval: 1.0)
+                self.refreshGitProjectStatus()
+                
+                // 等待主线程更新 UI 状态以核实 app.isRunning
+                var isRunning = false
+                let group = DispatchGroup()
+                group.enter()
+                DispatchQueue.main.async {
+                    isRunning = app.isRunning
+                    group.leave()
+                }
+                group.wait()
+                
+                if isRunning {
+                    startSuccess = true
+                    break
+                }
             }
             
-            let cdCmd = "cd \(self.shellQuote(localPath))" + (startupCmd.isEmpty ? "" : " && \(startupCmd)")
-            let escaped = cdCmd.replacingOccurrences(of: "\"", with: "\\\"")
-            _ = ProcessRunner.runCommand("osascript -e 'tell application \"Terminal\" to do script \"\(escaped)\"' -e 'tell application \"Terminal\" to activate' 2>&1")
-            
-            Thread.sleep(forTimeInterval: 2.5)
-            self.refreshGitProjectStatus()
+            if !startSuccess {
+                self.showAlert(
+                    title: "服务启动超时或失败",
+                    message: "启动命令 [\(startupCmd)] 已在后台尝试执行，但在 15 秒内未检测到任何服务端口处于监听状态。进程可能因为依赖缺失、配置错误或虚拟环境未找到已异常退出。\n\n提示：若服务正常运行但启动较慢，可稍后手动刷新查看。如确有错误，建议在终端中手动运行排查。"
+                )
+            }
+
             DispatchQueue.main.async { app.isStartingOrStopping = false }
+        }
+    }
+
+    // 智能推断当前项目的启动命令
+    private func inferStartupCommand(for localPath: String, learnedCmd: String?, checkSubdirs: Bool = true) -> String {
+        let fm = FileManager.default
+
+        // 1. 使用之前学到的已持久化的启动命令（优先级最高）
+        if let learned = learnedCmd, !learned.isEmpty {
+            return learned
+        }
+
+        // 2. 精确匹配标准启动脚本（如 kiro-go、Yuque2DingTalk.command、各种 start.sh 等）
+        let standardScripts = ["kiro-go", "start.sh", "run.sh", "dev.sh", "serve.sh", "launch.sh", "Yuque2DingTalk.command"]
+        for script in standardScripts {
+            let path = localPath + "/" + script
+            if fm.fileExists(atPath: path) {
+                return "./" + script
+            }
+        }
+
+        // 3. 模糊匹配常见命名的 shell / command 脚本，但排除 setup / install / deploy / build / test / configure 等安装与构建脚本
+        if let files = try? fm.contentsOfDirectory(atPath: localPath) {
+            for file in files {
+                let lower = file.lowercased()
+                if file.hasSuffix(".sh") || file.hasSuffix(".command") {
+                    if lower.contains("install") || lower.contains("setup") || lower.contains("deploy") || lower.contains("build") || lower.contains("test") || lower.contains("configure") {
+                        continue
+                    }
+                    if lower.contains("start") || lower.contains("run") || lower.contains("dev") || lower.contains("serve") || lower.contains("launch") || lower.contains("yuque") {
+                        return "./" + file
+                    }
+                }
+            }
+        }
+
+        // 4. docker-compose
+        for name in ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"] {
+            if fm.fileExists(atPath: localPath + "/" + name) {
+                return "docker compose up"
+            }
+        }
+
+        // 5. package.json — 读取 scripts 字段，按优先级选择
+        if fm.fileExists(atPath: localPath + "/package.json"),
+           let data = try? Data(contentsOf: URL(fileURLWithPath: localPath + "/package.json")),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let scripts = json["scripts"] as? [String: Any] {
+            for key in ["dev", "start", "serve", "preview", "run"] {
+                if scripts[key] != nil { return "npm run " + key }
+            }
+            if !scripts.isEmpty { return "npm run dev" }
+        }
+
+        // 6. Python
+        for entry in ["app.py", "server.py", "main.py", "run.py", "manage.py"] {
+            if fm.fileExists(atPath: localPath + "/" + entry) {
+                if entry == "manage.py" { return "python3 manage.py runserver" }
+                return "python3 " + entry
+            }
+        }
+
+        // 7. Go
+        if fm.fileExists(atPath: localPath + "/go.mod") { return "go run ." }
+
+        // 8. Rust
+        if fm.fileExists(atPath: localPath + "/Cargo.toml") { return "cargo run" }
+
+        // 9. 纯静态网页 (动态查找空闲端口)
+        if fm.fileExists(atPath: localPath + "/index.html") {
+            let freePort = self.findFreePort(startingFrom: 8080)
+            return "python3 -m http.server \(freePort)"
+        }
+
+        // 10. 单独子目录探测 (解决 monorepo 根目录下没有构建配置的问题，如 finance-tracker/frontend)
+        if checkSubdirs {
+            if let subdirCmd = self.inferSubdirStartupCommand(localPath: localPath) {
+                return subdirCmd
+            }
+        }
+
+        return ""
+    }
+
+    // 递归寻找子目录中的开发配置并推断启动命令 (限深 1 层)
+    private func inferSubdirStartupCommand(localPath: String) -> String? {
+        let fm = FileManager.default
+        guard let subdirs = try? fm.contentsOfDirectory(atPath: localPath) else { return nil }
+        
+        var commands: [String] = []
+        for sub in subdirs {
+            let subPath = localPath + "/" + sub
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: subPath, isDirectory: &isDir), isDir.boolValue else { continue }
+            // 跳过无关的目录
+            guard !sub.hasPrefix("."), sub != "node_modules", sub != "vendor", sub != "target", sub != "dist", sub != "output" else { continue }
+            
+            let subCmd = self.inferStartupCommand(for: subPath, learnedCmd: nil, checkSubdirs: false)
+            if !subCmd.isEmpty {
+                commands.append("cd \(self.shellQuote(sub)) && \(subCmd)")
+            }
+        }
+        
+        if commands.isEmpty { return nil }
+        if commands.count == 1 {
+            return commands[0]
+        } else {
+            // 并发在后台启动多个子模块 (如 frontend 和 backend)
+            return commands.map { "(\($0))" }.joined(separator: " & ")
         }
     }
     
@@ -581,10 +811,8 @@ extension RadarScanner {
     // 打开 Git 项目的 Web 控制台
     func openGitProjectUI(_ app: RadarUpdateApp) {
         guard let port = app.servicePort else { return }
-        var urlString = "http://localhost:\(port)"
-        if app.name.lowercased().contains("kiro") {
-            urlString += "/admin"
-        }
+        let suffix = self.webPathSuffix(for: app)
+        let urlString = "http://localhost:\(port)\(suffix)"
         if let url = URL(string: urlString) {
             NSWorkspace.shared.open(url)
         }

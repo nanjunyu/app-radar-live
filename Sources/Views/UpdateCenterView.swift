@@ -512,7 +512,17 @@ struct AppGridCard: View {
                         Text(app.isRunning ? "运行中" : "已停止")
                             .font(.system(size: 10)).foregroundColor(app.isRunning ? .green : .secondary)
                         if let port = app.servicePort {
-                            Text(":\(port)").font(.system(size: 9, design: .monospaced)).foregroundColor(.secondary)
+                            let suffix = scanner.webPathSuffix(for: app)
+                            Button(action: {
+                                if let url = URL(string: "http://localhost:\(String(port))\(suffix)") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }) {
+                                Text("localhost:\(String(port))\(suffix)")
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(.blue.opacity(0.8))
+                                    .underline()
+                            }.buttonStyle(PlainButtonStyle())
                         }
                     }.padding(.top, 2)
                 }
@@ -586,8 +596,8 @@ struct AppGridCard: View {
                     Spacer()
                 }
             }
-            // App Store / Homebrew cask / 其他独立应用：打开应用（formula 是 CLI 无 GUI，不显示）
-            if ((app.category == .appStore) || (app.category == .brew && app.isCask) || (app.category == .other && app.sourceKind == .sparkleApp)) && app.upgraded {
+            // App Store / Homebrew cask (仅当成功定位到本地 .app 时) / 其他独立应用：打开应用
+            if ((app.category == .appStore) || (app.category == .brew && app.isCask && app.localPath != nil) || (app.category == .other && app.sourceKind == .sparkleApp)) && app.upgraded {
                 VStack {
                     Spacer()
                     Button(action: { scanner.launchApp(app) }) {
@@ -641,6 +651,29 @@ struct AppDetailView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(app.bestName).font(.system(size: 32, weight: .bold))
                         Text(app.developer ?? app.category.cleanName).font(.title3).foregroundColor(.gray)
+                        // 运行状态 + 完整地址（Node / Git / Brew 服务专属）
+                        if app.category == .node || app.category == .git || (app.category == .brew && app.isBrewService) {
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(app.isRunning ? Color.green : Color.gray.opacity(0.4))
+                                    .frame(width: 8, height: 8)
+                                Text(app.isRunning ? "运行中" : "已停止")
+                                    .font(.system(size: 13)).foregroundColor(app.isRunning ? .green : .secondary)
+                                if let port = app.servicePort {
+                                    let suffix = scanner.webPathSuffix(for: app)
+                                    Button(action: {
+                                        if let url = URL(string: "http://localhost:\(String(port))\(suffix)") {
+                                            NSWorkspace.shared.open(url)
+                                        }
+                                    }) {
+                                        Text("localhost:\(String(port))\(suffix)")
+                                            .font(.system(size: 13, design: .monospaced))
+                                            .foregroundColor(.blue.opacity(0.85))
+                                            .underline()
+                                    }.buttonStyle(PlainButtonStyle())
+                                }
+                            }
+                        }
                         HStack(spacing: 12) {
                             if app.upgraded {
                                 if app.category == .node || app.category == .git || (app.category == .brew && app.isBrewService) || (app.category == .other && app.sourceKind == .cliTool) {
@@ -671,6 +704,8 @@ struct AppDetailView: View {
                                                     Button(action: {
                                                         if app.category == .node {
                                                             scanner.openNodeServiceUI(app)
+                                                        } else if app.category == .brew {
+                                                            scanner.openBrewServiceUI(app)
                                                         } else {
                                                             scanner.openGitProjectUI(app)
                                                         }
@@ -700,13 +735,15 @@ struct AppDetailView: View {
                                         }
                                     }
                                 } else {
-                                    // App Store / Homebrew / 独立应用，有 GUI，显示「打开」
-                                    Button(action: { scanner.launchApp(app) }) {
-                                        Label("打开", systemImage: "arrow.up.forward.app")
-                                            .font(.subheadline).foregroundColor(accentColor)
-                                            .padding(.horizontal, 16).padding(.vertical, 9)
-                                            .background(accentColor.opacity(0.12)).cornerRadius(18)
-                                    }.buttonStyle(PlainButtonStyle())
+                                    // App Store / Homebrew cask (仅限有本地 .app) / 独立应用，有 GUI，显示「打开」
+                                    if app.category == .appStore || (app.category == .brew && app.isCask && app.localPath != nil) || (app.category == .other && app.sourceKind == .sparkleApp) {
+                                        Button(action: { scanner.launchApp(app) }) {
+                                            Label("打开", systemImage: "arrow.up.forward.app")
+                                                .font(.subheadline).foregroundColor(accentColor)
+                                                .padding(.horizontal, 16).padding(.vertical, 9)
+                                                .background(accentColor.opacity(0.12)).cornerRadius(18)
+                                        }.buttonStyle(PlainButtonStyle())
+                                    }
                                 }
                                 
                                 // 取消忽略按钮
