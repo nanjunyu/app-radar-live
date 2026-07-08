@@ -215,14 +215,15 @@ extension RadarScanner {
             DispatchQueue.main.async { app.isUpgrading = true; app.upgradeMessage = "正在下载安装（首次较大，可能需 1-2 分钟）…" }
             DispatchQueue.global(qos: .userInitiated).async {
                 var lastLine = ""
-                let code = ProcessRunner.runCommandStreaming("\(cmd) 2>&1") { line in
+                let result = ProcessRunner.runCommandStreaming("\(cmd) 2>&1") { line in
                     lastLine = line
                     if let s = self.progressStatus(for: line) {
                         DispatchQueue.main.async { app.upgradeMessage = s }
                     }
                 }
                 let lower = lastLine.lowercased()
-                let failed = code != 0 || lower.contains("error") || lower.contains("failed")
+                let failed = result.code != 0 || lower.contains("error") || lower.contains("failed")
+                if failed { ProcessRunner.killProcessTree(pid: result.pid) }
                 DispatchQueue.main.async {
                     app.isUpgrading = false
                     if failed {

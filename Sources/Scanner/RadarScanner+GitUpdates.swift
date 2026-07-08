@@ -240,7 +240,7 @@ extension RadarScanner {
             let q = self.shellQuote(path)
             let outputLock = NSLock()
             var fullOutput = ""
-            let code = ProcessRunner.runCommandStreaming("git -C \(q) pull --ff-only 2>&1") { line in
+            let result = ProcessRunner.runCommandStreaming("git -C \(q) pull --ff-only 2>&1") { line in
                 outputLock.lock()
                 fullOutput += line + "\n"
                 outputLock.unlock()
@@ -253,7 +253,7 @@ extension RadarScanner {
             let diverged = lower.contains("not possible to fast-forward") || lower.contains("diverg")
             let localChanges = lower.contains("would be overwritten") || lower.contains("local changes") || lower.contains("unstaged")
             let conflict = lower.contains("conflict")
-            let failed = code != 0 || lower.contains("error") || lower.contains("fatal") || conflict || diverged || localChanges
+            let failed = result.code != 0 || lower.contains("error") || lower.contains("fatal") || conflict || diverged || localChanges
             DispatchQueue.main.async {
                 app.isUpgrading = false
                 if !failed {
