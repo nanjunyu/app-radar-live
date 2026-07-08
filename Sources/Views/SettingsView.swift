@@ -123,7 +123,7 @@ struct SettingsView: View {
             // 设置列表项
             settingsSection {
                 VStack(spacing: 0) {
-                    settingsRow(title: "后台自动更新", subtitle: "检测到新版本时，在后台默默更新，完成后提示重启") {
+                    settingsRow(title: "后台自动更新", subtitle: "检测到 AppRadar Live 新版本时，自动下载安装并重启，无需手动操作") {
                         togglePill(isOn: $autoCheckUpdate)
                     }
                     dividerLine

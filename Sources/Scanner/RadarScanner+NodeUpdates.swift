@@ -196,7 +196,7 @@ extension RadarScanner {
             // scope 包名（@scope/pkg）整体加单引号，避免 shell 误解析
             let target = "'\(app.name)@latest'"
             var lastLine = ""
-            let code = ProcessRunner.runCommandStreaming("npm install -g \(Environment.npmPrefixArg)\(target) 2>&1") { line in
+            let result = ProcessRunner.runCommandStreaming("npm install -g \(Environment.npmPrefixArg)\(target) 2>&1") { line in
                 lastLine = line
                 if let s = self.progressStatus(for: line) {
                     DispatchQueue.main.async { app.upgradeMessage = s }
@@ -208,16 +208,16 @@ extension RadarScanner {
             if lower.contains("eacces") || lower.contains("permission denied") {
                 DispatchQueue.main.async { app.upgradeMessage = "需要授权（指纹）…" }
                 var line2 = ""
-                let code2 = ProcessRunner.runCommandStreaming("sudo npm install -g \(Environment.npmPrefixArg)\(target) 2>&1") { line in
+                let result2 = ProcessRunner.runCommandStreaming("sudo npm install -g \(Environment.npmPrefixArg)\(target) 2>&1") { line in
                     line2 = line
                     if let s = self.progressStatus(for: line) {
                         DispatchQueue.main.async { app.upgradeMessage = s }
                     }
                 }
-                self.finishNodeUpgrade(app, code: code2, lastLine: line2)
+                self.finishNodeUpgrade(app, code: result2.code, lastLine: line2)
                 return
             }
-            self.finishNodeUpgrade(app, code: code, lastLine: lastLine)
+            self.finishNodeUpgrade(app, code: result.code, lastLine: lastLine)
         }
     }
     

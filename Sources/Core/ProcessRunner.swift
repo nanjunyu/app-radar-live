@@ -86,9 +86,10 @@ struct ProcessRunner {
     // 流式执行：逐行回调输出（用于升级等长耗时命令的实时进度）。
     // 可选 stdin：把 input 写入标准输入（如把密码喂给 `sudo -S`）。
     // mas/brew 的下载百分比用 \r 刷新、阶段用 \n，这里两者都按行切分。
-    // onLine 在后台线程回调，UI 更新需自行切回主线程。返回进程退出码。
+    // onLine 在后台线程回调，UI 更新需自行切回主线程。
+    // 返回 (exitCode, pid)。pid 可用于事后清理残留子进程。
     @discardableResult
-    static func runCommandStreaming(_ command: String, stdin input: String? = nil, onLine: @escaping (String) -> Void) -> Int32 {
+    static func runCommandStreaming(_ command: String, stdin input: String? = nil, onLine: @escaping (String) -> Void) -> (code: Int32, pid: Int32) {
         let process = Process()
         let pipe = Pipe()
         let inPipe = Pipe()
@@ -99,17 +100,21 @@ struct ProcessRunner {
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         
         let handle = pipe.fileHandleForReading
+        // 用串行队列保护 strBuffer 的读写，消除 readabilityHandler 回调的数据竞争
+        let bufferQueue = DispatchQueue(label: "com.appradar.streaming-buffer")
         var strBuffer = ""
         handle.readabilityHandler = { fh in
             let data = fh.availableData
             guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
-            strBuffer += chunk
-            let parts = strBuffer.components(separatedBy: CharacterSet(charactersIn: "\n\r"))
-            for line in parts.dropLast() {
-                let t = line.trimmingCharacters(in: .whitespaces)
-                if !t.isEmpty { onLine(t) }
+            bufferQueue.sync {
+                strBuffer += chunk
+                let parts = strBuffer.components(separatedBy: CharacterSet(charactersIn: "\n\r"))
+                for line in parts.dropLast() {
+                    let t = line.trimmingCharacters(in: .whitespaces)
+                    if !t.isEmpty { onLine(t) }
+                }
+                strBuffer = parts.last ?? ""
             }
-            strBuffer = parts.last ?? ""
         }
         
         do {
@@ -121,11 +126,22 @@ struct ProcessRunner {
             process.waitUntilExit()
         } catch {
             handle.readabilityHandler = nil
-            return -1
+            return (-1, 0)
         }
         handle.readabilityHandler = nil
-        let tail = strBuffer.trimmingCharacters(in: .whitespaces)
-        if !tail.isEmpty { onLine(tail) }
-        return process.terminationStatus
+        // 处理缓冲区中剩余内容
+        bufferQueue.sync {
+            let tail = strBuffer.trimmingCharacters(in: .whitespaces)
+            if !tail.isEmpty { onLine(tail) }
+        }
+        return (process.terminationStatus, process.processIdentifier)
+    }
+    
+    /// 杀掉进程及其所有子进程（整个进程组），用于清理升级失败后残留的 brew/curl 子进程
+    static func killProcessTree(pid: Int32) {
+        guard pid > 0 else { return }
+        // pkill -P 杀掉以 pid 为父进程的所有子进程，再杀 pid 本身
+        _ = runRaw("/usr/bin/pkill", ["-P", "\(pid)"])
+        kill(pid, SIGKILL)
     }
 }

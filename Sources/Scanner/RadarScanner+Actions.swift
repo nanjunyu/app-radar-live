@@ -41,15 +41,18 @@ extension RadarScanner {
             // 用 `script` 分配伪终端(PTY)，让 mas 以为在终端里运行，从而输出带百分比的进度条。
             DispatchQueue.main.async { app.upgradeMessage = "升级中…（按指纹确认）" }
             var lastLine = ""
-            let code = ProcessRunner.runCommandStreaming("script -q /dev/null mas upgrade \(app.appId ?? "") 2>&1") { line in
+            let result = ProcessRunner.runCommandStreaming("script -q /dev/null mas upgrade \(app.appId ?? "") 2>&1") { line in
                 lastLine = line
                 if let s = self.progressStatus(for: line) {
                     DispatchQueue.main.async { app.upgradeMessage = s }
                 }
             }
             let lower = lastLine.lowercased()
-            let failed = code != 0 || lower.contains("error") || lower.contains("failed")
+            let failed = result.code != 0 || lower.contains("error") || lower.contains("failed")
                 || lower.contains("no downloads") || lower.contains("purchased") || lower.contains("password is required")
+            if failed {
+                ProcessRunner.killProcessTree(pid: result.pid)
+            }
             DispatchQueue.main.async {
                 app.isUpgrading = false
                 if failed {
@@ -70,14 +73,18 @@ extension RadarScanner {
         DispatchQueue.main.async { app.isUpgrading = true; app.upgradeMessage = "升级中…" }
         DispatchQueue.global(qos: .userInitiated).async {
             var lastLine = ""
-            let code = ProcessRunner.runCommandStreaming("brew upgrade \(app.name) 2>&1") { line in
+            let result = ProcessRunner.runCommandStreaming("brew upgrade \(app.name) 2>&1") { line in
                 lastLine = line
                 if let s = self.progressStatus(for: line) {
                     DispatchQueue.main.async { app.upgradeMessage = s }
                 }
             }
             let lower = lastLine.lowercased()
-            let failed = code != 0 || lower.contains("error") || lower.contains("failed")
+            let failed = result.code != 0 || lower.contains("error") || lower.contains("failed")
+            if failed {
+                // 升级失败时杀掉残留的子进程（如 brew 派生的 curl 下载器），释放锁文件
+                ProcessRunner.killProcessTree(pid: result.pid)
+            }
             DispatchQueue.main.async {
                 app.isUpgrading = false
                 if failed {
