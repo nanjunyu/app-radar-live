@@ -53,29 +53,29 @@
 ### 1. 资源监控雷达 (Resource Monitor)
 | 系统进程 CPU/内存与端口列表 | Docker 容器指标监控与启停 |
 | :---: | :---: |
-| ![系统进程](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/monitor_processes.png) | ![Docker容器](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/monitor_docker.png) |
+| ![系统进程](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/monitor_processes.png?v=2) | ![Docker容器](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/monitor_docker.png?v=2) |
 
 ### 2. 多源更新管理 (Updates Management)
 | 多渠道更新总览列表 | App Store 应用详情展示 |
 | :---: | :---: |
-| ![更新列表](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/update_list.png) | ![AppStore详情](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/update_appstore.png) |
+| ![更新列表](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/update_list.png?v=2) | ![AppStore详情](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/update_appstore.png?v=2) |
 
 | Node.js 全局包更新 | Git 本地项目雷达 |
 | :---: | :---: |
-| ![Node更新](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/update_nodejs.png) | ![Git项目雷达](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/update_git.png) |
+| ![Node更新](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/update_nodejs.png?v=2) | ![Git项目雷达](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/update_git.png?v=2) |
 
 ### 3. 应用详情与状态栏
 | 独立应用详情页 (如 QQ) | CLI 终端工具详情 (如 firecrawl-cli) |
 | :---: | :---: |
-| ![App详情](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/detail_app.png) | ![CLI详情](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/detail_cli.png) |
+| ![App详情](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/detail_app.png?v=2) | ![CLI详情](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/detail_cli.png?v=2) |
 
 | 菜单栏常驻浮窗 (Popover) | 智能防骚扰通知中心 |
 | :---: | :---: |
-| ![菜单栏浮窗](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/tray_popover.png) | ![智能通知](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/tray_notification.png) |
+| ![菜单栏浮窗](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/tray_popover.png?v=2) | ![智能通知](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/tray_notification.png?v=2) |
 
 | 主题配色切换设置 |
 | :---: |
-| ![主题设置](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/tray_settings.png) |
+| ![主题设置](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/tray_settings.png?v=2) |
 
 ---
 
@@ -100,7 +100,7 @@ AppRadar-Live 桌面端在运行时会调用以下命令行工具获取数据，
 
 由于本应用未上架 App Store，macOS Gatekeeper 会阻止首次打开，您可能会看到如下提示：
 
-![Gatekeeper 安全提示](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/gatekeeper_warning.png)
+![Gatekeeper 安全提示](https://cdn.jsdelivr.net/gh/nanjunyu/app-radar-live@main/screenshots/gatekeeper_warning.png?v=2)
 
 请使用以下任一方式解决（仅需操作一次）：
 
