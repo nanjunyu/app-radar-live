@@ -77,19 +77,28 @@ extension RadarScanner {
                 self.restoreIgnoreState()
                 self.refreshDockBadge()
                 
-                // 检查是否有新增待更新的应用并推送通知
-                let currentPending = Set(self.updates.filter { !$0.upgraded && !$0.ignored }.map { $0.name })
-                let newUpdates = currentPending.subtracting(self.lastNotifiedUpdates)
-                if !newUpdates.isEmpty {
-                    let totalCount = currentPending.count
-                    let namesStr = newUpdates.prefix(3).map { $0 }.joined(separator: ", ")
+                // 仅对“应用 + 目标版本”的新组合推送一次；键会持久化，重启后不会重复提醒。
+                let pendingApps = self.updates.filter { !$0.upgraded && !$0.ignored }
+                let notificationKey: (RadarUpdateApp) -> String = { app in
+                    "\(app.ignoreKey)|\(app.latestVersion ?? "unknown")"
+                }
+                let newUpdates = pendingApps.filter { !self.lastNotifiedUpdates.contains(notificationKey($0)) }
+                let defaults = UserDefaults.standard
+                let notificationsEnabled = defaults.object(forKey: "showUpdateBadge") == nil
+                    ? true : defaults.bool(forKey: "showUpdateBadge")
+                if notificationsEnabled && !newUpdates.isEmpty {
+                    let namesStr = newUpdates.prefix(3).map { $0.name }.joined(separator: ", ")
                     let suffix = newUpdates.count > 3 ? " 等" : ""
                     self.sendNotification(
                         title: "🎉 发现软件更新",
-                        body: "检测到新发布可更新的包: \(namesStr)\(suffix)（共 \(totalCount) 项待更新）。"
+                        body: "检测到新发布可更新的版本: \(namesStr)\(suffix)（共 \(pendingApps.count) 项待更新）。"
                     )
+                    self.lastNotifiedUpdates.formUnion(newUpdates.map(notificationKey))
+                    // 限制历史记录规模，避免长期使用后 UserDefaults 无界增长。
+                    let persisted = Array(self.lastNotifiedUpdates.suffix(500))
+                    self.lastNotifiedUpdates = Set(persisted)
+                    defaults.set(persisted, forKey: "notifiedUpdateVersionKeys")
                 }
-                self.lastNotifiedUpdates = currentPending
                 // 刷新 Node 包运行状态（启停按钮）
                 self.refreshNodeServiceStatus()
                 // 刷新 Homebrew 服务运行状态（启停按钮与端口）

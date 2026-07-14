@@ -23,8 +23,10 @@ class RadarScanner: ObservableObject {
     private var hasStartedAutoRefresh = false   // 防止启动扫描被多次触发
     var iconCache: [pid_t: NSImage] = [:]
     
-    // 通知跟踪状态，防止频繁重复推送
-    var lastNotifiedUpdates: Set<String> = []
+    // 通知去重键持久化，保证同一应用的同一版本跨 App 重启也只提醒一次。
+    var lastNotifiedUpdates: Set<String> = Set(
+        UserDefaults.standard.stringArray(forKey: "notifiedUpdateVersionKeys") ?? []
+    )
     private var lastCpuAlertTime: Date?
     private var lastMemAlertTime: Date?
     
