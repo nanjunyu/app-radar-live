@@ -16,8 +16,8 @@ extension RadarScanner {
         UserDefaults.standard.set(cmd, forKey: key)
     }
 
-    // 扫描本机 GitHub 仓库：发现 → 仅保留 origin 为 github.com → fetch 对比是否落后。
-    // 落后的进「待更新」，其余进「已安装」。仅在启动/手动刷新时执行（涉及网络，较慢）。
+    // 扫描本机 GitHub 仓库：发现 → 仅保留 origin 为 github.com → 检查默认主干稳定版本 Tag。
+    // 只有默认主干发布更高稳定版本时进入“待更新”；普通提交和预发布版本不触发提醒。
     func scanGitProjects() {
         DispatchQueue.main.async {
             self.isScanningGit = true
@@ -186,61 +186,165 @@ extension RadarScanner {
         return roots
     }
     
-    // 评估单个仓库：fetch 后对比本地与远程，构建 RadarUpdateApp
+    // 仅把默认主干上新增的稳定语义化版本 Tag 视为更新。
+    // 普通 commit、功能分支提交和预发布 Tag（如 v2.0.0-beta.1）均不会触发更新。
     private func evaluateRepo(path: String) -> RadarUpdateApp? {
         let q = shellQuote(path)
         let name = (path as NSString).lastPathComponent
         let url = ProcessRunner.runCommand("git -C \(q) remote get-url origin 2>/dev/null")
         let (owner, repoName) = Self.parseGitHub(url)
         let branch = ProcessRunner.runCommand("git -C \(q) rev-parse --abbrev-ref HEAD 2>/dev/null")
-        
-        // fetch 最新远程状态（静默，限制只取当前分支）
-        _ = ProcessRunner.runCommand("git -C \(q) fetch --quiet 2>/dev/null")
-        
         let localSha = ProcessRunner.runCommand("git -C \(q) rev-parse --short HEAD 2>/dev/null")
-        let remoteSha = ProcessRunner.runCommand("git -C \(q) rev-parse --short @{u} 2>/dev/null")
-        let behindStr = ProcessRunner.runCommand("git -C \(q) rev-list --count HEAD..@{u} 2>/dev/null")
-        let behind = Int(behindStr.trimmingCharacters(in: .whitespaces)) ?? 0
-        
+
         let app = RadarUpdateApp(name: name, category: .git)
         app.localPath = path
         app.detectedStartCmd = self.loadGitStartCmd(forLocalPath: path)
         app.developer = owner.isEmpty ? branch : owner
         app.currentVersion = localSha.isEmpty ? nil : localSha
-        app.latestVersion = remoteSha.isEmpty ? localSha : remoteSha
-        app.descriptionText = "分支 \(branch) · \(url)"
+        app.latestVersion = app.currentVersion
+        app.descriptionText = "当前分支 \(branch) · \(url)"
         if !owner.isEmpty {
             app.homepage = URL(string: "https://github.com/\(owner)/\(repoName)")
             app.logoUrl = URL(string: "https://github.com/\(owner).png?size=128")
         }
-        
-        // 语言：从本地文件扩展名快速统计（最多扫 200 个文件）
+
         app.language = Self.detectLanguage(at: path)
-        
-        // 最后更新时间：本地最新 commit 时间 → 转为相对时间
         let dateStr = ProcessRunner.runCommand("git -C \(q) log -1 --format=%ci 2>/dev/null")
         app.lastUpdated = Self.relativeTime(from: dateStr)
-        
-        if behind > 0 {
-            // 落后 → 待更新，拉取提交日志作为「升级说明」
-            let log = ProcessRunner.runCommand("git -C \(q) log HEAD..@{u} --oneline -n 15 2>/dev/null")
-            app.changelogNotes = "落后远程 \(behind) 个提交：\n" + log
+
+        // 必须成功刷新远端分支和 tags；失败时不使用可能过期的缓存制造更新提示。
+        let fetchResult = ProcessRunner.runCommand(
+            "git -C \(q) fetch --quiet --tags origin 2>/dev/null && echo __APP_RADAR_FETCH_OK__ || echo __APP_RADAR_FETCH_FAILED__"
+        )
+        guard fetchResult.contains("__APP_RADAR_FETCH_OK__") else {
+            app.descriptionText = "当前分支 \(branch) · 暂时无法检查主干版本"
+            app.upgraded = true
+            return app
+        }
+
+        guard let defaultBranch = defaultRemoteBranch(at: path) else {
+            app.descriptionText = "当前分支 \(branch) · 未识别远端默认主干"
+            app.upgraded = true
+            return app
+        }
+        let defaultRef = "origin/\(defaultBranch)"
+        app.descriptionText = "当前分支 \(branch) · 默认主干 \(defaultBranch) · \(url)"
+
+        let remoteTags = ProcessRunner.runCommand(
+            "git -C \(q) tag --merged \(shellQuote(defaultRef)) 2>/dev/null"
+        )
+        let localTags = ProcessRunner.runCommand("git -C \(q) tag --merged HEAD 2>/dev/null")
+        let remoteVersion = Self.latestStableVersionTag(in: remoteTags)
+        let localVersion = Self.latestStableVersionTag(in: localTags)
+
+        // 没有稳定版本 Tag 的仓库不进入待更新；主干上的普通提交也不会触发提醒。
+        guard let remoteVersion else {
+            if let localVersion { app.currentVersion = localVersion.tag; app.latestVersion = localVersion.tag }
+            app.upgraded = true
+            return app
+        }
+
+        app.currentVersion = localVersion?.tag ?? (localSha.isEmpty ? "未发布版本" : localSha)
+        app.latestVersion = remoteVersion.tag
+        let hasNewStableVersion = localVersion == nil
+            || Self.isVersion(remoteVersion.parts, newerThan: localVersion!.parts)
+
+        if hasNewStableVersion {
+            let range = localVersion.map { "\(shellQuote($0.tag))..\(shellQuote(remoteVersion.tag))" }
+                ?? shellQuote(remoteVersion.tag)
+            let log = ProcessRunner.runCommand("git -C \(q) log \(range) --oneline -n 15 2>/dev/null")
+            app.changelogNotes = "默认主干发布了稳定版本 \(remoteVersion.tag)"
+                + (log.isEmpty ? "" : "：\n\(log)")
             app.upgraded = false
         } else {
-            app.upgraded = true   // 已是最新 → 已安装
+            app.upgraded = true
         }
         return app
     }
-    
-    // git pull 更新本地仓库（ff-only 安全模式），流式进度
+
+    private func defaultRemoteBranch(at path: String) -> String? {
+        let q = shellQuote(path)
+        let symbolic = ProcessRunner.runCommand(
+            "git -C \(q) symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null"
+        )
+        if symbolic.hasPrefix("origin/") {
+            return String(symbolic.dropFirst("origin/".count))
+        }
+        for candidate in ["main", "master"] {
+            let exists = ProcessRunner.runCommand(
+                "git -C \(q) rev-parse --verify --quiet refs/remotes/origin/\(candidate) 2>/dev/null"
+            )
+            if !exists.isEmpty { return candidate }
+        }
+        return nil
+    }
+
+    private static func latestStableVersionTag(in output: String) -> (tag: String, parts: [Int])? {
+        var latest: (tag: String, parts: [Int])?
+        for raw in output.components(separatedBy: .newlines) {
+            let tag = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let parts = stableVersionParts(tag) else { continue }
+            if latest == nil || isVersion(parts, newerThan: latest!.parts) {
+                latest = (tag, parts)
+            }
+        }
+        return latest
+    }
+
+    private static func stableVersionParts(_ tag: String) -> [Int]? {
+        var version = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        if version.hasPrefix("v") || version.hasPrefix("V") { version.removeFirst() }
+        // 接受稳定版本的构建元数据（1.2.3+4），拒绝所有带“-”的预发布版本。
+        if version.contains("-") { return nil }
+        version = String(version.split(separator: "+", maxSplits: 1).first ?? "")
+        let components = version.split(separator: ".", omittingEmptySubsequences: false)
+        guard (2...4).contains(components.count) else { return nil }
+        var parts: [Int] = []
+        for component in components {
+            guard !component.isEmpty,
+                  component.allSatisfy({ $0.isNumber }),
+                  let value = Int(component) else { return nil }
+            parts.append(value)
+        }
+        return parts
+    }
+
+    private static func isVersion(_ lhs: [Int], newerThan rhs: [Int]) -> Bool {
+        for index in 0..<max(lhs.count, rhs.count) {
+            let left = index < lhs.count ? lhs[index] : 0
+            let right = index < rhs.count ? rhs[index] : 0
+            if left != right { return left > right }
+        }
+        return false
+    }
+
+    // 只在当前检出默认主干时执行 ff-only 拉取，避免误更新功能分支。
     func upgradeGitRepo(_ app: RadarUpdateApp) {
         guard let path = app.localPath, !app.isUpgrading else { return }
-        DispatchQueue.main.async { app.isUpgrading = true; app.upgradeMessage = "拉取中…" }
+        DispatchQueue.main.async { app.isUpgrading = true; app.upgradeMessage = "准备更新主干…" }
         DispatchQueue.global(qos: .userInitiated).async {
             let q = self.shellQuote(path)
+            guard let defaultBranch = self.defaultRemoteBranch(at: path) else {
+                DispatchQueue.main.async {
+                    app.isUpgrading = false
+                    app.upgradeMessage = "⚠️ 未识别远端默认主干，无法自动更新"
+                }
+                return
+            }
+            let currentBranch = ProcessRunner.runCommand("git -C \(q) rev-parse --abbrev-ref HEAD 2>/dev/null")
+            guard currentBranch == defaultBranch else {
+                DispatchQueue.main.async {
+                    app.isUpgrading = false
+                    app.upgradeMessage = "⚠️ 当前位于 \(currentBranch) 分支，请先切换到主干 \(defaultBranch) 再更新"
+                }
+                return
+            }
+
             let outputLock = NSLock()
             var fullOutput = ""
-            let result = ProcessRunner.runCommandStreaming("git -C \(q) pull --ff-only 2>&1") { line in
+            let result = ProcessRunner.runCommandStreaming(
+                "git -C \(q) pull --ff-only origin \(self.shellQuote(defaultBranch)) 2>&1"
+            ) { line in
                 outputLock.lock()
                 fullOutput += line + "\n"
                 outputLock.unlock()
@@ -249,7 +353,6 @@ extension RadarScanner {
             outputLock.lock()
             let lower = fullOutput.lowercased()
             outputLock.unlock()
-            // ff-only 失败（本地有分叉/改动）→ 给出清晰且易懂的中文解释
             let diverged = lower.contains("not possible to fast-forward") || lower.contains("diverg")
             let localChanges = lower.contains("would be overwritten") || lower.contains("local changes") || lower.contains("unstaged")
             let conflict = lower.contains("conflict")
@@ -257,21 +360,19 @@ extension RadarScanner {
             DispatchQueue.main.async {
                 app.isUpgrading = false
                 if !failed {
-                    app.upgradeMessage = "✅ 已更新到最新"
+                    app.upgradeMessage = "✅ 已更新到最新稳定版本"
                     app.upgraded = true
                     self.refreshDockBadge()
+                } else if localChanges {
+                    app.upgradeMessage = "⚠️ 本地文件已被修改，为防止改动丢失，更新已终止"
+                } else if diverged {
+                    app.upgradeMessage = "⚠️ 本地主干与远程产生分叉，请手动处理后再更新"
+                } else if conflict {
+                    app.upgradeMessage = "⚠️ 本地修改与远程版本冲突，请手动解决"
+                } else if lower.contains("could not read from remote") || lower.contains("timed out") || lower.contains("resolve host") {
+                    app.upgradeMessage = "⚠️ 无法连接远程仓库，请检查网络连接或 GitHub 权限"
                 } else {
-                    if localChanges {
-                        app.upgradeMessage = "⚠️ 本地文件已被修改，为防止您的改动丢失，更新已终止。若不需要修改，可点详情页使用「强制更新」"
-                    } else if diverged {
-                        app.upgradeMessage = "⚠️ 本地有新提交与远程产生了分叉。可使用「强制更新」覆盖本地，或手动处理"
-                    } else if conflict {
-                        app.upgradeMessage = "⚠️ 本地修改与远程更新冲突。可使用「强制更新」覆盖本地，或手动解决冲突"
-                    } else if lower.contains("could not read from remote") || lower.contains("timed out") || lower.contains("resolve host") {
-                        app.upgradeMessage = "⚠️ 无法连接远程仓库，请检查网络连接或 GitHub 权限"
-                    } else {
-                        app.upgradeMessage = "⚠️ 更新失败，建议您进入详情页使用「强制更新」"
-                    }
+                    app.upgradeMessage = "⚠️ 更新失败，请检查仓库状态后重试"
                 }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self.scanGitProjects() }
